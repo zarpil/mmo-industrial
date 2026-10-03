@@ -13,7 +13,7 @@ const io = new Server(httpServer, { cors: { origin: '*' } });
 let globalPlayer: Player = {
   id: 'player-1',
   username: 'Capitalista_01',
-  money: 500,
+  money: 15000,
   createdAt: new Date(),
 };
 let globalMachine: MachineInstance = {

@@ -675,14 +675,15 @@ export default function App() {
   const handleBuyProperty = () => {
     if (!selectedProperty || !player) return;
     if (player.money < selectedProperty.price) {
-      alert(`Capital insuficiente. Necesitas ${selectedProperty.price} € para adquirir esta propiedad.`);
+      setFloatingPill(`⚠️ Capital insuficiente (${selectedProperty.price.toLocaleString()} € necesarios)`);
+      setTimeout(() => setFloatingPill(null), 3500);
       return;
     }
 
     playSound('cash');
     socket.emit('buyProperty', selectedProperty);
-    setFloatingPill(`¡Edificio Adquirido!`);
-    setTimeout(() => setFloatingPill(null), 3000);
+    setFloatingPill(`🎉 ¡${selectedProperty.name} Adquirido!`);
+    setTimeout(() => setFloatingPill(null), 3500);
   };
 
   // Demoler Edificio
@@ -690,25 +691,23 @@ export default function App() {
     if (!selectedProperty || !player) return;
     const demolitionCost = 150;
     if (player.money < demolitionCost) {
-      alert(`Necesitas ${demolitionCost} € para costes de demolición y desescombro.`);
-      return;
-    }
-
-    if (!confirm(`¿Confirmas la demolición de ${selectedProperty.name}? La estructura actual será derribada para dejar un solar limpio.`)) {
+      setFloatingPill(`⚠️ Fondos insuficientes para demolición (${demolitionCost} €)`);
+      setTimeout(() => setFloatingPill(null), 3500);
       return;
     }
 
     playSound('demolish');
     socket.emit('demolishProperty', { propertyId: selectedProperty.id });
-    setFloatingPill(`🔨 Edificio Demolido`);
-    setTimeout(() => setFloatingPill(null), 3000);
+    setFloatingPill(`🔨 Demolición completada: Solar despejado`);
+    setTimeout(() => setFloatingPill(null), 3500);
   };
 
   // Construir Instalación sobre Solar
   const handleConstructFacility = (facility: FacilityOption) => {
     if (!selectedProperty || !player) return;
     if (player.money < facility.cost) {
-      alert(`Capital insuficiente para construir ${facility.name} (Requiere ${facility.cost} €).`);
+      setFloatingPill(`⚠️ Requiere ${facility.cost} € para edificar`);
+      setTimeout(() => setFloatingPill(null), 3500);
       return;
     }
 
@@ -720,7 +719,7 @@ export default function App() {
       cost: facility.cost,
     });
     setFloatingPill(`🏗️ ¡${facility.name} Construida!`);
-    setTimeout(() => setFloatingPill(null), 3000);
+    setTimeout(() => setFloatingPill(null), 3500);
   };
 
   // Renombrar / Editar Nombre de la Propiedad
