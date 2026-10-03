@@ -6,8 +6,8 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['maplibre-gl'],
   },
-  // Permite que Vite empaquete el worker de MapLibre correctamente en producción
-  worker: {
-    format: 'es',
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
   },
 })
