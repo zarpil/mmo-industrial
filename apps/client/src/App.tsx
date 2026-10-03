@@ -181,32 +181,42 @@ export default function App() {
         } catch (_) {}
       });
 
-      // EDIFICIOS 3D — Usando la source openmaptiles del demotiles style
-      // Intenta añadir la capa 3D sobre el source existente
-      const sources = m.getStyle().sources;
-      const sourceId = Object.keys(sources).find(s =>
-        sources[s].url?.includes('openmaptiles') ||
-        sources[s].url?.includes('maptiler') ||
-        sources[s].url?.includes('maplibre')
-      );
+      // EDIFICIOS 3D: buscar el source correcto iterando todos los disponibles
+      const sources = m.getStyle().sources as Record<string, any>;
+      console.log('Sources disponibles:', Object.keys(sources));
+      console.log('Layers disponibles:', m.getStyle().layers.map((l: any) => l.id + '(' + l.type + ')'));
 
-      if (sourceId) {
-        m.addLayer({
-          id: 'buildings-3d',
-          source: sourceId,
-          'source-layer': 'building',
-          type: 'fill-extrusion',
-          minzoom: 14,
-          paint: {
-            'fill-extrusion-color': [
-              'interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 5],
-              0, '#0e1825', 20, '#152240', 60, '#1a3060', 150, '#1e3a75',
-            ],
-            'fill-extrusion-height': ['coalesce', ['get', 'render_height'], ['get', 'height'], 5],
-            'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0],
-            'fill-extrusion-opacity': 0.85,
-          },
-        });
+      // El demotiles style tiene source "openmaptiles"
+      // Buscar el primer source de tipo vector
+      const vectorSourceId = Object.entries(sources).find(
+        ([, s]) => (s as any).type === 'vector'
+      )?.[0];
+
+      console.log('Vector source encontrado:', vectorSourceId);
+
+      if (vectorSourceId) {
+        try {
+          m.addLayer({
+            id: 'buildings-3d',
+            source: vectorSourceId,
+            'source-layer': 'building',
+            type: 'fill-extrusion',
+            minzoom: 14,
+            paint: {
+              'fill-extrusion-color': [
+                'interpolate', ['linear'],
+                ['coalesce', ['get', 'render_height'], ['get', 'height'], 5],
+                0, '#0e1825', 20, '#152240', 60, '#1a3060', 150, '#1e3a75',
+              ],
+              'fill-extrusion-height': ['coalesce', ['get', 'render_height'], ['get', 'height'], 5],
+              'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0],
+              'fill-extrusion-opacity': 0.85,
+            },
+          });
+          console.log('✅ Capa 3D de edificios añadida correctamente');
+        } catch (err) {
+          console.warn('⚠️ No se pudo añadir buildings-3d:', err);
+        }
       }
 
       setMapReady(true);
