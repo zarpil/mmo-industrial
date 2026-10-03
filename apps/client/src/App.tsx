@@ -1,11 +1,33 @@
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
 import type { Player, MachineInstance } from '@mmo/shared';
 
+// Arreglo para que los iconos de Leaflet carguen bien en Vite
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+// URL del WebSocket que funciona en Local y VPS
 const backendUrl = import.meta.env.PROD 
   ? `http://${window.location.hostname}:3001`
   : 'http://localhost:3001';
 const socket: Socket = io(backendUrl);
+
+// Componente invisible que escucha clicks en el mapa para posicionar cosas
+function LocationSelector({ onLocationSelected }: { onLocationSelected: (latlng: L.LatLng) => void }) {
+  useMapEvents({
+    click(e) {
+      onLocationSelected(e.latlng);
+    },
+  });
+  return null;
+}
 
 function App() {
   const [connected, setConnected] = useState(false);
@@ -28,9 +50,7 @@ function App() {
     };
   }, []);
 
-  const handleSell = () => {
-    socket.emit('sellCoal');
-  };
+  const handleSell = () => socket.emit('sellCoal');
 
   if (!connected) {
     return (
@@ -40,87 +60,75 @@ function App() {
     );
   }
 
-  const coalSlot = machine?.inventory.slots.find(s => s.itemId === 'coal_ore');
-  const coalAmount = coalSlot?.quantity || 0;
+  const coalAmount = machine?.inventory.slots.find(s => s.itemId === 'coal_ore')?.quantity || 0;
+  
+  // Por ahora la máquina del prototipo la plantamos en el centro de España
+  const machineCoords: [number, number] = [40.4168, -3.7038]; 
 
   return (
-    <div style={{ padding: '40px', fontFamily: 'sans-serif', backgroundColor: '#1e1e2f', color: '#fff', minHeight: '100vh' }}>
-      <h1>🌍 MMO Industrial - Vertical Slice</h1>
+    <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
       
-      {player && (
-        <div style={{ backgroundColor: '#2a2a40', padding: '20px', borderRadius: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h2>Corporación: {player.username}</h2>
-            <p style={{ fontSize: '24px', margin: '10px 0', color: '#f1c40f' }}>💰 {player.money} €</p>
-          </div>
-          <button 
-            onClick={handleSell}
-            disabled={coalAmount === 0}
-            style={{ 
-              padding: '15px 30px', 
-              fontSize: '18px', 
-              backgroundColor: coalAmount > 0 ? '#3498db' : '#555', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '5px',
-              cursor: coalAmount > 0 ? 'pointer' : 'not-allowed'
-            }}
-          >
-            Vender Carbón (+{coalAmount * 5}€)
-          </button>
-        </div>
-      )}
-      
-      <div style={{ backgroundColor: '#2a2a40', padding: '20px', borderRadius: '8px' }}>
-        <h2>Vista de Parcela (God View)</h2>
-        <p>Esta mina produce 1 de carbón cada 5 segundos incluso si cierras la pestaña.</p>
+      {/* UI Overlay flotante */}
+      <div style={{ position: 'absolute', top: 20, left: 20, zIndex: 1000, pointerEvents: 'none' }}>
+        <h1 style={{ color: 'white', textShadow: '2px 2px 4px #000', margin: '0 0 20px 0' }}>🌍 MMO Industrial</h1>
         
-        <div style={{ 
-          width: '500px', 
-          height: '400px', 
-          backgroundColor: '#27ae60', 
-          position: 'relative',
-          border: '4px solid #2ecc71',
-          borderRadius: '4px',
-          marginTop: '20px'
-        }}>
-          
-          {machine && (
-            <div style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              width: '120px',
-              height: '120px',
-              backgroundColor: '#2c3e50',
-              border: `2px solid ${machine.status === 'full' ? '#e74c3c' : '#34495e'}`,
-              color: 'white',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '14px',
-              textAlign: 'center',
-              boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-              borderRadius: '8px'
-            }}>
-              <span style={{ fontSize: '30px' }}>🏭</span>
-              <br />
-              Mina de Carbón
-              <br />
-              <div style={{ marginTop: '10px', padding: '5px', backgroundColor: '#000', borderRadius: '4px' }}>
-                Inventario: {coalAmount} / {machine.inventory.maxVolume}
-              </div>
-              {machine.status === 'full' && (
-                <div style={{ color: '#e74c3c', fontSize: '10px', marginTop: '5px', fontWeight: 'bold' }}>
-                  ALMACÉN LLENO
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        {player && (
+          <div style={{ backgroundColor: 'rgba(42, 42, 64, 0.95)', padding: '20px', borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.5)', pointerEvents: 'auto', backdropFilter: 'blur(5px)' }}>
+            <h2 style={{ color: 'white', margin: '0 0 10px 0' }}>Corporación: {player.username}</h2>
+            <p style={{ fontSize: '28px', margin: '10px 0', color: '#f1c40f', fontWeight: 'bold' }}>💰 {player.money} €</p>
+            
+            <button 
+              onClick={handleSell}
+              disabled={coalAmount === 0}
+              style={{ 
+                padding: '12px 20px', 
+                fontSize: '16px', 
+                backgroundColor: coalAmount > 0 ? '#3498db' : '#555', 
+                color: 'white', 
+                border: 'none', 
+                borderRadius: '5px',
+                cursor: coalAmount > 0 ? 'pointer' : 'not-allowed',
+                width: '100%',
+                fontWeight: 'bold',
+                transition: 'background-color 0.2s'
+              }}
+            >
+              Vender Carbón (+{coalAmount * 5}€)
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* El Mapa del Mundo */}
+      <MapContainer 
+        center={[20.0, 0.0]} // Empieza viendo todo el mapamundi
+        zoom={3} 
+        style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
+        zoomControl={true}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        
+        <LocationSelector onLocationSelected={(latlng) => console.log('Coordenadas clickeadas:', latlng)} />
+
+        {machine && (
+          <Marker position={machineCoords}>
+            <Popup>
+              <div style={{ textAlign: 'center', minWidth: '150px' }}>
+                <h3 style={{ margin: '0 0 10px 0', color: '#2c3e50' }}>🏭 Mina de Carbón</h3>
+                <div style={{ backgroundColor: '#f1f2f6', padding: '10px', borderRadius: '5px', marginBottom: '5px' }}>
+                  <strong>Inventario:</strong> {coalAmount} / {machine.inventory.maxVolume}
+                </div>
+                {machine.status === 'full' && (
+                  <strong style={{ color: '#e74c3c', display: 'block', marginTop: '5px' }}>¡ALMACÉN LLENO!</strong>
+                )}
+              </div>
+            </Popup>
+          </Marker>
+        )}
+      </MapContainer>
     </div>
   );
 }
