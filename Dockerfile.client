@@ -1,0 +1,20 @@
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Copiar configuraciones raíz
+COPY package.json package-lock.json ./
+
+# Copiar workspaces
+COPY packages ./packages
+COPY apps/client ./apps/client
+
+# Instalar y compilar
+RUN npm install
+RUN npm run build -w @mmo/shared
+RUN npm run build -w apps/client
+
+# Servir con Nginx (muy ligero)
+FROM nginx:alpine
+COPY --from=builder /app/apps/client/dist /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

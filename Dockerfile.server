@@ -1,0 +1,18 @@
+FROM node:20-alpine
+WORKDIR /app
+
+# Copiar configuraciones raíz
+COPY package.json package-lock.json ./
+
+# Copiar workspaces
+COPY packages ./packages
+COPY apps/server ./apps/server
+
+# Instalar y compilar
+RUN npm install
+RUN npm run build -w @mmo/shared
+RUN npm run build -w @mmo/game-data
+RUN npm run build -w @mmo/server
+
+EXPOSE 3001
+CMD ["npm", "run", "start", "-w", "@mmo/server"]

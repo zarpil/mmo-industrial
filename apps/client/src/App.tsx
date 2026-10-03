@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { Player, MachineInstance } from '@mmo/shared';
 
-const socket: Socket = io('http://localhost:3001');
+const backendUrl = import.meta.env.PROD 
+  ? `http://${window.location.hostname}:3001`
+  : 'http://localhost:3001';
+const socket: Socket = io(backendUrl);
 
 function App() {
   const [connected, setConnected] = useState(false);

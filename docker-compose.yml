@@ -19,6 +19,33 @@ services:
     volumes:
       - redisdata:/data
 
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER:-mmo_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mmo_password}
+      - POSTGRES_DB=${POSTGRES_DB:-mmo_db}
+      - POSTGRES_PORT=5432
+    depends_on:
+      - postgres
+      - redis
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - server
+
 volumes:
   pgdata:
   redisdata:
