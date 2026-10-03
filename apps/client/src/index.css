@@ -241,3 +241,57 @@ html, body, #root {
   box-shadow: 0 4px 16px rgba(0,0,0,0.7), 0 0 10px rgba(234,88,12,0.4);
 }
 
+/* Cantera y Cráter Minero Deformable MMO */
+.quarry-pit-badge {
+  background: linear-gradient(135deg, #451a03 0%, #1c1917 100%);
+  border: 2px solid #f59e0b;
+  border-radius: 12px;
+  padding: 6px 14px;
+  font-family: 'Chakra Petch', sans-serif;
+  color: #fff;
+  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.85), 0 0 20px rgba(245,158,11,0.5);
+  position: relative;
+}
+
+.quarry-pit-badge::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 8px 7px 0 7px;
+  border-style: solid;
+  border-color: #f59e0b transparent transparent transparent;
+}
+
+.quarry-hazard-light {
+  width: 8px;
+  height: 8px;
+  background: #facc15;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #facc15;
+  animation: hazard-blink 1s infinite alternate;
+}
+
+@keyframes hazard-blink {
+  0% { opacity: 0.3; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1.3); filter: drop-shadow(0 0 6px #eab308); }
+}
+
+.quarry-depth-tag {
+  background: rgba(245, 158, 11, 0.25);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #facc15;
+  font-family: monospace;
+  letter-spacing: 0.5px;
+}
+

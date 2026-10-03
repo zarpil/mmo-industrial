@@ -16,6 +16,9 @@ const STYLE_URL = 'https://tiles.openfreemap.org/styles/bright';
 // Ciudades e hitos globales para navegación instantánea
 const GLOBAL_HUBS = [
   { id: 'madrid', name: 'Madrid (Distrito AZCA)', coords: [-3.6917, 40.4500] as [number, number], zoom: 16.2, pitch: 62, bearing: -25 },
+  { id: 'guadarrama', name: '🏔️ Sierra de Guadarrama (Cantera Los Molinos)', coords: [-3.9650, 40.7850] as [number, number], zoom: 14.8, pitch: 72, bearing: -35 },
+  { id: 'garzweiler', name: '⛏️ Cantera Gigante Garzweiler (Alemania)', coords: [6.5050, 51.0550] as [number, number], zoom: 14.8, pitch: 70, bearing: 45 },
+  { id: 'alps', name: '🏔️ Alpes Suizos (Matterhorn / Picos 4.400m)', coords: [7.7491, 46.0207] as [number, number], zoom: 13.8, pitch: 75, bearing: -20 },
   { id: 'ny', name: 'Nueva York (Midtown)', coords: [-73.9855, 40.7484] as [number, number], zoom: 16.0, pitch: 64, bearing: 30 },
   { id: 'tokyo', name: 'Tokio (Shinjuku)', coords: [139.6917, 35.6895] as [number, number], zoom: 16.4, pitch: 60, bearing: -40 },
   { id: 'london', name: 'Londres (Canary Wharf)', coords: [-0.0235, 51.5054] as [number, number], zoom: 16.1, pitch: 62, bearing: 45 },
@@ -71,6 +74,7 @@ interface FacilityOption {
 }
 
 const FACILITY_OPTIONS: FacilityOption[] = [
+  { id: 'open_pit_mine', name: 'Cantera a Cielo Abierto', icon: '⛏️', cost: 350, revenueBonus: 45, desc: 'Corta el terreno en bancos escalonados hacia abajo. Profundiza con el tiempo y extrae minerales.' },
   { id: 'corp_hq', name: 'Sede Corporativa Central', icon: '🏢', cost: 800, revenueBonus: 65, desc: 'Genera 65€/tick por alquiler corporativo y expande el límite de red.' },
   { id: 'deep_mine', name: 'Pozo Minero Profundo', icon: '⛏️', cost: 450, revenueBonus: 35, desc: 'Extracción subterránea automatizada de minerales de alta ley.' },
   { id: 'urban_foundry', name: 'Fundición Metalúrgica', icon: '🔥', cost: 650, revenueBonus: 50, desc: 'Horno de arco eléctrico para transformación pesada.' },
@@ -78,6 +82,100 @@ const FACILITY_OPTIONS: FacilityOption[] = [
   { id: 'tech_tower', name: 'Torre de Oficinas I+D', icon: '🏙️', cost: 1200, revenueBonus: 95, desc: 'Alquiler tecnológico y patentes industriales (+95€/tick).' },
   { id: 'logistics_depot', name: 'Centro Logístico y Distribución', icon: '🚚', cost: 700, revenueBonus: 55, desc: 'Almacén de aduana con acceso directo a vías rápidas.' },
 ];
+
+// Generador de geometría 3D para cráteres y canteras a cielo abierto deformables
+function generateQuarryCratersGeoJSON(props: RealEstateProperty[]) {
+  const features: any[] = [];
+  props.forEach(p => {
+    const depth = p.excavationDepthMeters || (p.facilityType?.includes('mine') ? 8 : 0);
+    if (depth <= 0) return;
+
+    const [lng, lat] = [p.coords.lng, p.coords.lat];
+    const numPoints = 28;
+
+    // Escala del radio según el tamaño y la profundidad de la cantera
+    const baseRadius = 0.00045 + Math.min(0.00025, depth * 0.000003);
+
+    // 1. Dique / Talud de Coronación Elevado (Berm exterior de contención y seguridad)
+    // Se eleva 3.5m por encima de la cota natural de la tierra
+    const bermCoords: [number, number][] = [];
+    for (let i = 0; i <= numPoints; i++) {
+      const angle = (i / numPoints) * Math.PI * 2;
+      bermCoords.push([
+        lng + Math.cos(angle) * (baseRadius * 1.18),
+        lat + Math.sin(angle) * (baseRadius * 1.18 * 0.74)
+      ]);
+    }
+    features.push({
+      type: 'Feature',
+      properties: {
+        id: `${p.id}-berm`,
+        height: 3.8,
+        color: '#78350f', // Arcilla rojiza compactada y terraplén de desmonte
+      },
+      geometry: { type: 'Polygon', coordinates: [bermCoords] }
+    });
+
+    // 2. Banco Superior (Tier 1: Desmonte de Suelo - Cota -5m)
+    const tier1Coords: [number, number][] = [];
+    for (let i = 0; i <= numPoints; i++) {
+      const angle = (i / numPoints) * Math.PI * 2;
+      tier1Coords.push([
+        lng + Math.cos(angle) * baseRadius,
+        lat + Math.sin(angle) * (baseRadius * 0.74)
+      ]);
+    }
+    features.push({
+      type: 'Feature',
+      properties: {
+        id: `${p.id}-tier1`,
+        height: 2.2,
+        color: '#a16207', // Banco de áridos y grava
+      },
+      geometry: { type: 'Polygon', coordinates: [tier1Coords] }
+    });
+
+    // 3. Banco Intermedio (Tier 2: Corte de Roca - Cota -20m a -40m)
+    const tier2Coords: [number, number][] = [];
+    for (let i = 0; i <= numPoints; i++) {
+      const angle = (i / numPoints) * Math.PI * 2;
+      tier2Coords.push([
+        lng + Math.cos(angle) * (baseRadius * 0.68),
+        lat + Math.sin(angle) * (baseRadius * 0.68 * 0.74)
+      ]);
+    }
+    features.push({
+      type: 'Feature',
+      properties: {
+        id: `${p.id}-tier2`,
+        height: 1.1,
+        color: '#451a03', // Pared de roca madre fracturada
+      },
+      geometry: { type: 'Polygon', coordinates: [tier2Coords] }
+    });
+
+    // 4. Fondo del Cráter / Pozo de Extracción Minera (Cota -40m a -80m)
+    const pitCoords: [number, number][] = [];
+    for (let i = 0; i <= numPoints; i++) {
+      const angle = (i / numPoints) * Math.PI * 2;
+      pitCoords.push([
+        lng + Math.cos(angle) * (baseRadius * 0.38),
+        lat + Math.sin(angle) * (baseRadius * 0.38 * 0.74)
+      ]);
+    }
+    features.push({
+      type: 'Feature',
+      properties: {
+        id: `${p.id}-pit`,
+        height: 0.2,
+        color: '#18181b', // Fondo carbón / magnetita oscura
+      },
+      geometry: { type: 'Polygon', coordinates: [pitCoords] }
+    });
+  });
+
+  return { type: 'FeatureCollection', features };
+}
 
 export default function App() {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -109,12 +207,28 @@ export default function App() {
   const [selectedHub, setSelectedHub] = useState('madrid');
   const [activeTab, setActiveTab] = useState<'overview' | 'market' | 'factory' | 'properties'>('overview');
   const [visualMode, setVisualMode] = useState<'satellite' | 'realistic' | 'dark'>('satellite');
+  const [terrainExaggeration, setTerrainExaggeration] = useState(2.6);
   const [buildingMode, setBuildingMode] = useState<BuildableBlueprint | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Notificación de eventos
   const [floatingPill, setFloatingPill] = useState<string | null>(null);
+
+  // Función para modificar en vivo el relieve 3D de montañas y terreno
+  const changeTerrainExaggeration = (val: number) => {
+    setTerrainExaggeration(val);
+    playSound('click');
+    if (map.current) {
+      try {
+        map.current.setTerrain({ source: 'terrain-dem', exaggeration: val });
+        setFloatingPill(`⛰️ Relieve de Terreno ajustado a ${val.toFixed(1)}x`);
+        setTimeout(() => setFloatingPill(null), 2500);
+      } catch (e) {
+        console.warn('Error al actualizar relieve:', e);
+      }
+    }
+  };
 
   // Reproductor de sonido sintetizado para inmersión
   const playSound = useCallback((type: 'click' | 'produce' | 'build' | 'cash' | 'demolish') => {
@@ -253,7 +367,7 @@ export default function App() {
         console.warn('Satellite layer error:', err);
       }
 
-      // ── D. Terreno 3D (DEM Elevation) con AWS Terrarium Tiles ──
+      // ── D. Terreno 3D (DEM Elevation) con Hillshading (Montañas y Relieve 3D) ──
       try {
         if (!m.getSource('terrain-dem')) {
           m.addSource('terrain-dem', {
@@ -263,8 +377,27 @@ export default function App() {
             tileSize: 256,
             maxzoom: 14,
           });
-          m.setTerrain({ source: 'terrain-dem', exaggeration: 1.35 });
-          console.log('⛰️ Terreno 3D activado con elevación real');
+          m.setTerrain({ source: 'terrain-dem', exaggeration: 2.6 });
+          console.log('⛰️ Terreno 3D activado con relieve aumentado a 2.6x');
+
+          // Capa de Hillshading: Sombras dinámicas y volumen en laderas montañosas y canteras
+          if (!m.getLayer('terrain-hillshade')) {
+            m.addLayer(
+              {
+                id: 'terrain-hillshade',
+                type: 'hillshade',
+                source: 'terrain-dem',
+                paint: {
+                  'hillshade-shadow-color': 'rgba(15, 23, 42, 0.45)',
+                  'hillshade-highlight-color': 'rgba(255, 255, 255, 0.48)',
+                  'hillshade-illumination-direction': 315,
+                  'hillshade-exaggeration': 0.72,
+                },
+              },
+              'building'
+            );
+            console.log('🏔️ Sombreado de relieve montañoso (Hillshade) inyectado');
+          }
         }
       } catch (err) {
         console.warn('⚠️ Elevación DEM omitida:', err);
@@ -309,9 +442,45 @@ export default function App() {
         console.warn('⚠️ No se pudo inyectar buildings-3d:', err);
       }
 
-      // ── F. Hover Interactivo con Cursor Puntero sobre Edificios ──
+      // ── F. Capas de Canteras y Cráteres de Excavación Minera Progresiva ──
+      try {
+        if (!m.getSource('quarry-craters')) {
+          m.addSource('quarry-craters', {
+            type: 'geojson',
+            data: generateQuarryCratersGeoJSON(propertiesRef.current),
+          });
+
+          m.addLayer({
+            id: 'quarry-craters-fill',
+            type: 'fill-extrusion',
+            source: 'quarry-craters',
+            paint: {
+              'fill-extrusion-color': ['get', 'color'],
+              'fill-extrusion-height': ['get', 'height'],
+              'fill-extrusion-base': 0,
+              'fill-extrusion-opacity': 0.92,
+            },
+          });
+
+          m.addLayer({
+            id: 'quarry-craters-outline',
+            type: 'line',
+            source: 'quarry-craters',
+            paint: {
+              'line-color': '#f59e0b',
+              'line-width': 2.5,
+              'line-dasharray': [3, 1],
+            },
+          });
+          console.log('⛏️ Capa 3D de canteras y cráteres inyectada con éxito');
+        }
+      } catch (err) {
+        console.warn('Quarry craters layer error:', err);
+      }
+
+      // ── G. Hover Interactivo con Cursor Puntero sobre Edificios ──
       m.on('mousemove', (e: any) => {
-        const features = m.queryRenderedFeatures(e.point, { layers: ['buildings-3d'] });
+        const features = m.queryRenderedFeatures(e.point, { layers: ['buildings-3d', 'quarry-craters-fill'] });
         m.getCanvas().style.cursor = features.length > 0 ? 'pointer' : '';
       });
 
@@ -440,9 +609,14 @@ export default function App() {
     };
   }, [mapReady, factoryCoords, playSound]);
 
-  // ── 3. Marcadores 3D para Propiedades Adquiridas y Solares Demolidos ─
+  // ── 3. Marcadores 3D para Propiedades Adquiridas, Solares y Canteras ─
   useEffect(() => {
     if (!mapReady || !map.current) return;
+
+    // Actualizar geometría 3D de canteras y cráteres en el mapa
+    if (map.current.getSource('quarry-craters')) {
+      map.current.getSource('quarry-craters').setData(generateQuarryCratersGeoJSON(properties));
+    }
 
     // Limpiar marcadores anteriores
     propertyMarkersRef.current.forEach(m => m.remove());
@@ -450,16 +624,43 @@ export default function App() {
 
     properties.forEach(prop => {
       const isPlayerOwned = prop.ownerId === player?.id;
-      if (!isPlayerOwned) return;
+      const isQuarry = (prop.excavationDepthMeters && prop.excavationDepthMeters > 0) || prop.facilityType?.includes('mine');
+      const isDemolished = prop.status === 'demolished';
+      const isAvailablePlot = prop.status === 'available' && prop.heightMeters === 0;
+
+      // Mostrar todos los cráteres/canteras mineras públicas, solares despejados y propiedades adquiridas
+      if (!isPlayerOwned && !isQuarry && !isDemolished && !isAvailablePlot) return;
 
       const el = document.createElement('div');
       el.className = 'owned-property-marker';
 
-      if (prop.status === 'demolished') {
+      if (isQuarry) {
+        el.innerHTML = `
+          <div class="quarry-pit-badge">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div class="quarry-hazard-light"></div>
+              <span style="font-size: 11px; font-weight: 800; color: #facc15; letter-spacing: 0.5px;">
+                ⛏️ CANTERA: ${prop.name}
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 10px;">
+              <span class="quarry-depth-tag">-${prop.excavationDepthMeters || 8}m</span>
+              <span style="font-size: 10px; color: #4ade80; font-weight: 700;">+${prop.totalMinedTons || 10} ton</span>
+            </div>
+          </div>
+        `;
+      } else if (isDemolished) {
         el.innerHTML = `
           <div class="demolished-site-badge">
             <span>🚧</span>
-            <span>SOLAR DEMOLIDO: ${prop.name}</span>
+            <span>SOLAR DESPEJADO: ${prop.name}</span>
+          </div>
+        `;
+      } else if (isAvailablePlot) {
+        el.innerHTML = `
+          <div class="demolished-site-badge" style="background: linear-gradient(135deg, #15803d, #166534); border-color: #86efac; box-shadow: 0 4px 16px rgba(0,0,0,0.7), 0 0 12px rgba(34,197,94,0.4);">
+            <span>🌿</span>
+            <span>SOLAR RÚSTICO: ${prop.name} (${prop.price}€)</span>
           </div>
         `;
       } else if (prop.status === 'facility_active') {
@@ -886,6 +1087,30 @@ export default function App() {
             ))}
           </div>
 
+          {/* Selector de Relieve 3D (Montañas y Canteras) */}
+          <div className="glass-panel" style={{ padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 4 }} title="Ajustar exageración de relieve 3D en montañas y valles">
+            <span style={{ fontSize: 13, marginRight: 2 }}>⛰️</span>
+            {[
+              { val: 1.4, label: '1.4x' },
+              { val: 2.6, label: '2.6x Juego' },
+              { val: 4.2, label: '4.2x Épico' },
+            ].map(r => (
+              <button
+                key={r.val}
+                onClick={() => changeTerrainExaggeration(r.val)}
+                style={{
+                  background: terrainExaggeration === r.val ? 'rgba(245, 158, 11, 0.3)' : 'transparent',
+                  border: terrainExaggeration === r.val ? '1px solid rgba(245, 158, 11, 0.6)' : 'none',
+                  borderRadius: 6, padding: '5px 8px', color: terrainExaggeration === r.val ? '#fbbf24' : '#94a3b8',
+                  fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+
           {/* Selector de Ciudad */}
           <div className="glass-panel" style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 16 }}>🌍</span>
@@ -1308,12 +1533,65 @@ export default function App() {
                 {selectedProperty.coords.lat.toFixed(5)}, {selectedProperty.coords.lng.toFixed(5)}
               </span>
             </div>
+
+            {/* Ficha Geológica si es cantera / mina a cielo abierto deformable */}
+            {((selectedProperty.excavationDepthMeters || 0) > 0 || selectedProperty.facilityType?.includes('mine')) && (
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(69, 26, 3, 0.5), rgba(24, 24, 27, 0.8))',
+                border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: 10, padding: 12,
+                display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1 }}>
+                    ⛏️ Cota Cantera a Cielo Abierto
+                  </span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: '#facc15', fontFamily: 'Chakra Petch' }}>
+                    -{selectedProperty.excavationDepthMeters || 8} metros
+                  </span>
+                </div>
+
+                <div style={{ width: '100%', height: 8, background: '#090d16', borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${Math.min(100, (((selectedProperty.excavationDepthMeters || 8)) / 75) * 100)}%`,
+                    height: '100%', background: 'linear-gradient(90deg, #f59e0b, #ea580c, #dc2626)',
+                    transition: 'width 0.5s ease',
+                  }} />
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8' }}>
+                  <span>Fase: {
+                    (selectedProperty.excavationDepthMeters || 8) < 15 ? 'Desmonte Inicial de Tierras' :
+                    (selectedProperty.excavationDepthMeters || 8) < 30 ? 'Bancos Escalonados' :
+                    (selectedProperty.excavationDepthMeters || 8) < 55 ? 'Cráter Minero Abierto' : 'Pozo Abisal de Roca Madre'
+                  }</span>
+                  <span style={{ color: '#4ade80', fontWeight: 700 }}>+{selectedProperty.totalMinedTons || 10} ton</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ACCIONES DISPONIBLES */}
 
-          {/* 1. Caso: Disponible para Compra */}
-          {!isSelectedOwnedByPlayer && (
+          {/* 1. Caso: Propiedad de Otro Jugador */}
+          {!isSelectedOwnedByPlayer && selectedProperty.ownerId !== null && (
+            <div style={{
+              background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)',
+              borderRadius: 8, padding: 12, display: 'flex', alignItems: 'center', gap: 10, marginTop: 4,
+            }}>
+              <span style={{ fontSize: 22 }}>🔒</span>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#fca5a5' }}>
+                  Propiedad de {selectedProperty.ownerName || 'Otro Magnate MMO'}
+                </div>
+                <div style={{ fontSize: 10, color: '#94a3b8' }}>
+                  Esta finca o cantera minera ya está registrada en el catastro territorial.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 2. Caso: Disponible para Compra en el Catastro */}
+          {!isSelectedOwnedByPlayer && selectedProperty.ownerId === null && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
               <div>
                 <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase' }}>Valor de Adquisición</div>
@@ -1332,23 +1610,23 @@ export default function App() {
                   letterSpacing: 0.5,
                 }}
               >
-                🛒 Comprar Inmueble
+                🛒 Comprar {selectedProperty.heightMeters === 0 ? 'Parcela' : 'Inmueble'}
               </button>
             </div>
           )}
 
-          {/* 2. Caso: Propiedad del Jugador (Demoler, Editar o Construir) */}
+          {/* 3. Caso: Propiedad del Jugador (Demoler, Abrir Cantera o Construir) */}
           {isSelectedOwnedByPlayer && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
-              {/* Botón de Demolición si el edificio aún existe */}
-              {selectedProperty.status !== 'demolished' && (
+              {/* Botón de Demolición si el edificio aún existe con altura */}
+              {selectedProperty.status !== 'demolished' && selectedProperty.heightMeters > 0 && (
                 <div style={{
                   background: 'rgba(234, 88, 12, 0.1)', border: '1px solid rgba(234, 88, 12, 0.3)',
                   borderRadius: 8, padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 }}>
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: '#fdba74' }}>Derribo y Demolición</div>
-                    <div style={{ fontSize: 10, color: '#94a3b8' }}>Demuele la estructura para edificar una factoría</div>
+                    <div style={{ fontSize: 10, color: '#94a3b8' }}>Demuele la estructura para despejar el solar y excavar</div>
                   </div>
 
                   <button
@@ -1364,10 +1642,24 @@ export default function App() {
                 </div>
               )}
 
-              {/* Opciones de Construcción sobre el solar despejado */}
+              {/* Indicador de Solar Despejado si no hay edificio */}
+              {(selectedProperty.status === 'demolished' || selectedProperty.heightMeters === 0) && (
+                <div style={{
+                  background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)',
+                  borderRadius: 8, padding: 10, display: 'flex', alignItems: 'center', gap: 10,
+                }}>
+                  <span style={{ fontSize: 20 }}>🌿</span>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#86efac' }}>Solar Despejado / Suelo Rústico</div>
+                    <div style={{ fontSize: 10, color: '#94a3b8' }}>Terreno listo para excavación de canteras a cielo abierto o factorías</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Opciones de Construcción y Excavación sobre el solar */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: 1 }}>
-                  🏗️ {selectedProperty.status === 'demolished' ? 'Edificar en el Solar Limpio' : 'Reconvertir Instalación'}
+                  🏗️ {selectedProperty.status === 'demolished' || selectedProperty.heightMeters === 0 ? 'Edificar en el Solar / Abrir Cantera' : 'Reconvertir Instalación'}
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>

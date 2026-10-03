@@ -57,6 +57,61 @@ let globalProperties: RealEstateProperty[] = [
     monthlyRevenue: 120,
     status: 'available',
     tier: 1,
+  },
+  {
+    id: 'parcel-madrid-solar-1',
+    name: 'Solar Despejado Sector AZCA',
+    address: 'Calle Raimundo Fernández Villaverde, Madrid',
+    coords: { lat: 40.4468, lng: -3.6942 },
+    areaSqm: 1400,
+    heightMeters: 0,
+    levels: 0,
+    buildingType: 'industrial',
+    ownerId: null,
+    price: 250,
+    monthlyRevenue: 15,
+    status: 'available',
+    tier: 1,
+  },
+  {
+    id: 'quarry-guadarrama-1',
+    name: 'Cantera de Granito & Cuarzo de Guadarrama',
+    address: 'Puerto de Navacerrada, Madrid',
+    coords: { lat: 40.7850, lng: -3.9650 },
+    areaSqm: 8500,
+    heightMeters: 0,
+    levels: 0,
+    buildingType: 'industrial',
+    ownerId: 'player-1',
+    ownerName: 'Capitalista_01',
+    price: 900,
+    monthlyRevenue: 65,
+    status: 'facility_active',
+    facilityType: 'open_pit_mine',
+    excavationDepthMeters: 28,
+    excavationStage: 2,
+    totalMinedTons: 42,
+    tier: 2,
+  },
+  {
+    id: 'quarry-garzweiler-1',
+    name: 'Tajo Minero a Cielo Abierto Garzweiler',
+    address: 'Rheinland Bergbaugebiet, Alemania',
+    coords: { lat: 51.0550, lng: 6.5050 },
+    areaSqm: 18000,
+    heightMeters: 0,
+    levels: 0,
+    buildingType: 'industrial',
+    ownerId: 'player-1',
+    ownerName: 'Capitalista_01',
+    price: 1800,
+    monthlyRevenue: 120,
+    status: 'facility_active',
+    facilityType: 'open_pit_mine',
+    excavationDepthMeters: 54,
+    excavationStage: 3,
+    totalMinedTons: 115,
+    tier: 3,
   }
 ];
 
@@ -142,6 +197,17 @@ setInterval(async () => {
     .filter(p => p.ownerId === globalPlayer.id && p.status !== 'demolished')
     .forEach(p => {
       globalPlayer.money += Number((p.monthlyRevenue / 12).toFixed(1));
+    });
+
+  // Dinámica de Terreno: Hundimiento y profundización progresiva de canteras/minas a cielo abierto
+  globalProperties
+    .filter(p => p.facilityType === 'open_pit_mine' || p.facilityType === 'deep_mine' || p.facilityType === 'coal_mine' || p.facilityType === 'iron_mine' || (p.status === 'facility_active' && p.facilityType?.includes('mine')))
+    .forEach(p => {
+      p.totalMinedTons = (p.totalMinedTons || 0) + 2;
+      p.excavationDepthMeters = Math.min(85, Math.floor((p.totalMinedTons || 0) * 0.8) + 5);
+      p.excavationStage = (p.excavationDepthMeters < 15) ? 1 :
+                          (p.excavationDepthMeters < 30) ? 2 :
+                          (p.excavationDepthMeters < 55) ? 3 : 4;
     });
   
   await saveStateToDb(); // Persistencia!
@@ -245,6 +311,11 @@ io.on('connection', async (socket) => {
       prop.facilityType = facilityType;
       prop.name = name;
       prop.monthlyRevenue = Math.floor(cost * 0.15);
+      if (facilityType === 'deep_mine' || facilityType.includes('mine')) {
+        prop.totalMinedTons = 10;
+        prop.excavationDepthMeters = 8;
+        prop.excavationStage = 1;
+      }
       console.log(`🏗️ Nueva Instalación construida en: ${propertyId} (${facilityType})`);
       saveStateToDb();
       io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });

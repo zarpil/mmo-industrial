@@ -98,6 +98,10 @@ export interface RealEstateProperty {
   status: "available" | "owned" | "demolished" | "under_construction" | "facility_active";
   facilityType?: string | null; // "coal_mine" | "iron_mine" | "smelter" | "power_substation" | "logistics_hub" | "tech_hq"
   tier?: number;
+  // Dinámica de terreno y cráteres de excavación minera
+  excavationDepthMeters?: number; // Profundidad en metros bajo rasante (0 a 100m)
+  excavationStage?: number; // 0: rasante, 1: desmonte -5m, 2: cantera -15m, 3: cráter -30m, 4: pozo abisal -60m
+  totalMinedTons?: number; // Toneladas acumuladas extraídas
   customNotes?: string;
   createdAt?: Date;
 }
