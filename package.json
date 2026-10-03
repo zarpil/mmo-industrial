@@ -1,0 +1,13 @@
+{
+  "name": "mmo-industrial",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:infra": "docker-compose up -d",
+    "stop:infra": "docker-compose down"
+  }
+}
