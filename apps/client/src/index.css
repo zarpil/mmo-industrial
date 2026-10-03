@@ -4,11 +4,39 @@ html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background-color: #000;
-  font-family: system-ui, -apple-system, sans-serif;
+  background-color: #050a14;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Truco maestro: Invertir colores de OSM para tener un Dark Mode perfecto sin pagar API */
+/* MapLibre canvas: sin filtros, usamos nuestro propio estilo oscuro nativo */
 .maplibregl-canvas {
-  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+  image-rendering: auto;
 }
+
+/* Controles de navegación del mapa en modo oscuro */
+.maplibregl-ctrl-group {
+  background: rgba(8, 14, 26, 0.9) !important;
+  border: 1px solid #1a3060 !important;
+  box-shadow: 0 0 20px rgba(30,80,180,0.2) !important;
+}
+.maplibregl-ctrl-group button {
+  background-color: transparent !important;
+  border-bottom: 1px solid #1a3060 !important;
+}
+.maplibregl-ctrl-group button:last-child { border-bottom: none !important; }
+.maplibregl-ctrl-group button span {
+  filter: invert(1) brightness(0.7) sepia(1) saturate(3) hue-rotate(190deg) !important;
+}
+.maplibregl-ctrl-group button:hover { background: rgba(30,80,180,0.3) !important; }
+
+/* Esconder el logo de MapLibre */
+.maplibregl-ctrl-logo { display: none !important; }
+
+/* Atribución mínima */
+.maplibregl-ctrl-attrib {
+  background: rgba(8,14,26,0.7) !important;
+  color: #2a4060 !important;
+  font-size: 9px !important;
+}
+.maplibregl-ctrl-attrib a { color: #2a6090 !important; }
