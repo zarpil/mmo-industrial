@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import Map, { Marker, NavigationControl, Layer } from 'react-map-gl/maplibre';
+import Map, { Marker, NavigationControl } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Player, MachineInstance } from '@mmo/shared';
 
