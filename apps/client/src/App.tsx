@@ -10,8 +10,8 @@ const backendUrl = import.meta.env.PROD
   : 'http://localhost:3001';
 const socket: Socket = io(backendUrl);
 
-// Estilo Vectorial Oscuro Nativo de OpenFreeMap (rápido, sin API key, soporte OSM completo)
-const STYLE_URL = 'https://tiles.openfreemap.org/styles/dark';
+// Estilo Vectorial Diurno de OpenFreeMap (rápido, sin API key, soporte OSM completo)
+const STYLE_URL = 'https://tiles.openfreemap.org/styles/bright';
 
 // Ciudades e hitos globales para navegación instantánea
 const GLOBAL_HUBS = [
@@ -78,6 +78,7 @@ export default function App() {
   // Interacción UI
   const [selectedHub, setSelectedHub] = useState('madrid');
   const [activeTab, setActiveTab] = useState<'overview' | 'market' | 'factory' | 'parcels'>('overview');
+  const [visualMode, setVisualMode] = useState<'satellite' | 'realistic' | 'dark'>('satellite');
   const [selectedParcel, setSelectedParcel] = useState<{ lat: number; lng: number; area: number; zone: string; price: number } | null>(null);
   const [buildingMode, setBuildingMode] = useState<BuildableBlueprint | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
@@ -157,19 +158,65 @@ export default function App() {
     m.on('load', () => {
       console.log('🗺️ Mapa base cargado con éxito');
 
-      // ── A. Luz 3D direccional (ilumina caras de edificios 3D como en un juego) ──
+      // ── A. Luz 3D Solar Realista (iluminación diurna con sombras) ──
       try {
         m.setLight({
           anchor: 'viewport',
-          color: '#e2f1ff',
-          intensity: 0.65,
-          position: [1.5, 90, 75],
+          color: '#ffffff',
+          intensity: 0.95,
+          position: [1.5, 90, 48],
         });
       } catch (err) {
         console.warn('Luz no soportada:', err);
       }
 
-      // ── B. Terreno 3D (DEM Elevation) con AWS Terrarium Tiles ──
+      // ── B. Atmósfera y Cielo Realista ──
+      try {
+        if (m.setSky) {
+          m.setSky({
+            'sky-color': '#0284c7',
+            'sky-horizon-blend': 0.5,
+            'horizon-color': '#7dd3fc',
+            'horizon-fog-blend': 0.8,
+            'fog-color': '#e0f2fe',
+            'fog-ground-blend': 0.5,
+          });
+        }
+      } catch {}
+
+      // ── C. Capa Satelital Realista Fotorrealista (Esri World Imagery) ──
+      try {
+        if (!m.getSource('satellite-tiles')) {
+          m.addSource('satellite-tiles', {
+            type: 'raster',
+            tiles: [
+              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            ],
+            tileSize: 256,
+            maxzoom: 19,
+          });
+
+          // Insertar capa satélite debajo de los edificios
+          m.addLayer(
+            {
+              id: 'satellite-layer',
+              type: 'raster',
+              source: 'satellite-tiles',
+              minzoom: 0,
+              maxzoom: 22,
+              layout: {
+                visibility: 'visible', // Por defecto: Satélite 3D estilo Google Earth
+              },
+            },
+            'building'
+          );
+          console.log('🛰️ Capa de satélite fotorrealista 3D cargada');
+        }
+      } catch (err) {
+        console.warn('Satellite layer error:', err);
+      }
+
+      // ── D. Terreno 3D (DEM Elevation) con AWS Terrarium Tiles ──
       try {
         if (!m.getSource('terrain-dem')) {
           m.addSource('terrain-dem', {
@@ -186,7 +233,7 @@ export default function App() {
         console.warn('⚠️ Elevación DEM omitida:', err);
       }
 
-      // ── C. Edificios 3D con Extrusión Dinámica (OpenMapTiles) ──
+      // ── E. Edificios 3D con Extrusión Realista (Piedra, Cristal y Hormigón) ──
       try {
         if (!m.getLayer('buildings-3d')) {
           m.addLayer({
@@ -205,21 +252,21 @@ export default function App() {
               'fill-extrusion-base': [
                 'coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0
               ],
-              // Paleta arquitectónica ciber-industrial con gradiente por altura
+              // Paleta arquitectónica realista (fachadas de hormigón claro, piedra y cristal templado)
               'fill-extrusion-color': [
                 'interpolate', ['linear'],
                 ['coalesce', ['get', 'render_height'], ['get', 'height'], 12],
-                0, '#101c2e',
-                20, '#162842',
-                50, '#1c375c',
-                90, '#224a7d',
-                150, '#2a5ea0',
-                250, '#3878cc'
+                0, '#f8fafc',
+                20, '#e2e8f0',
+                50, '#cbd5e1',
+                90, '#94a3b8',
+                150, '#64748b',
+                250, '#475569'
               ],
-              'fill-extrusion-opacity': 0.88,
+              'fill-extrusion-opacity': 0.85,
             },
           });
-          console.log('🏢 Edificios 3D extrusionados renderizándose');
+          console.log('🏢 Edificios 3D realistas renderizándose');
         }
       } catch (err) {
         console.warn('⚠️ No se pudo inyectar buildings-3d:', err);
@@ -380,6 +427,82 @@ export default function App() {
     });
   };
 
+  // Acción: Conmutar entre Modo Satélite 3D, Ciudad Día y Modo Noche
+  const switchVisualMode = (mode: 'satellite' | 'realistic' | 'dark') => {
+    setVisualMode(mode);
+    playSound('click');
+    const m = map.current;
+    if (!m) return;
+
+    if (mode === 'satellite') {
+      if (m.getLayer('satellite-layer')) {
+        m.setLayoutProperty('satellite-layer', 'visibility', 'visible');
+      }
+      try {
+        m.setLight({ anchor: 'viewport', color: '#ffffff', intensity: 0.95, position: [1.5, 90, 48] });
+        if (m.setSky) {
+          m.setSky({ 'sky-color': '#0284c7', 'horizon-color': '#7dd3fc', 'fog-color': '#e0f2fe' });
+        }
+      } catch {}
+      if (m.getLayer('buildings-3d')) {
+        m.setPaintProperty('buildings-3d', 'fill-extrusion-opacity', 0.85);
+        m.setPaintProperty('buildings-3d', 'fill-extrusion-color', [
+          'interpolate', ['linear'],
+          ['coalesce', ['get', 'render_height'], ['get', 'height'], 12],
+          0, '#f8fafc',
+          20, '#e2e8f0',
+          50, '#cbd5e1',
+          90, '#94a3b8',
+          150, '#64748b',
+          250, '#475569'
+        ]);
+      }
+    } else if (mode === 'realistic') {
+      if (m.getLayer('satellite-layer')) {
+        m.setLayoutProperty('satellite-layer', 'visibility', 'none');
+      }
+      try {
+        m.setLight({ anchor: 'viewport', color: '#fffdf5', intensity: 0.9, position: [1.5, 80, 50] });
+        if (m.setSky) {
+          m.setSky({ 'sky-color': '#38bdf8', 'horizon-color': '#bae6fd', 'fog-color': '#f0f9ff' });
+        }
+      } catch {}
+      if (m.getLayer('buildings-3d')) {
+        m.setPaintProperty('buildings-3d', 'fill-extrusion-opacity', 0.9);
+        m.setPaintProperty('buildings-3d', 'fill-extrusion-color', [
+          'interpolate', ['linear'],
+          ['coalesce', ['get', 'render_height'], ['get', 'height'], 12],
+          0, '#f1f5f9',
+          20, '#e2e8f0',
+          50, '#cbd5e1',
+          90, '#94a3b8',
+          150, '#7898b8',
+          250, '#5a82a8'
+        ]);
+      }
+    } else if (mode === 'dark') {
+      if (m.getLayer('satellite-layer')) {
+        m.setLayoutProperty('satellite-layer', 'visibility', 'none');
+      }
+      try {
+        m.setLight({ anchor: 'viewport', color: '#70a5ff', intensity: 0.5, position: [1.5, 90, 75] });
+      } catch {}
+      if (m.getLayer('buildings-3d')) {
+        m.setPaintProperty('buildings-3d', 'fill-extrusion-opacity', 0.88);
+        m.setPaintProperty('buildings-3d', 'fill-extrusion-color', [
+          'interpolate', ['linear'],
+          ['coalesce', ['get', 'render_height'], ['get', 'height'], 12],
+          0, '#101c2e',
+          20, '#162842',
+          50, '#1c375c',
+          90, '#224a7d',
+          150, '#2a5ea0',
+          250, '#3878cc'
+        ]);
+      }
+    }
+  };
+
   // Acción: Construir en la parcela seleccionada
   const handleConfirmBuild = () => {
     if (!selectedParcel || !player) return;
@@ -505,6 +628,29 @@ export default function App() {
 
         {/* Global Travel & Audio controls */}
         <div style={{ display: 'flex', gap: 10 }}>
+          {/* Selector de Modo Visual (Satélite 3D / Ciudad Día / Noche) */}
+          <div className="glass-panel" style={{ padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 4 }}>
+            {[
+              { id: 'satellite', label: '🛰️ Satélite 3D' },
+              { id: 'realistic', label: '🏙️ Ciudad Día' },
+              { id: 'dark', label: '🌆 Noche' },
+            ].map(m => (
+              <button
+                key={m.id}
+                onClick={() => switchVisualMode(m.id as any)}
+                style={{
+                  background: visualMode === m.id ? 'rgba(56, 189, 248, 0.25)' : 'transparent',
+                  border: visualMode === m.id ? '1px solid rgba(56, 189, 248, 0.5)' : 'none',
+                  borderRadius: 6, padding: '5px 9px', color: visualMode === m.id ? '#38bdf8' : '#94a3b8',
+                  fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
           {/* Selector de Ciudad */}
           <div className="glass-panel" style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 16 }}>🌍</span>
