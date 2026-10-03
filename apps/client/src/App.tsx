@@ -21,8 +21,9 @@ const socket: Socket = io(backendUrl);
 const INDUSTRIAL_MAP_STYLE: StyleSpecification = {
   version: 8,
   name: 'Industrial Night',
-  glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
-  sprite: 'https://tiles.openfreemap.org/sprites/liberty/sprite',
+  // Glyphs (fuentes de texto) desde CDN de MapLibre - siempre disponible
+  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+  // Sin sprite: no usamos iconos POI, elimina el error 404
   sources: {
     openmaptiles: {
       type: 'vector',
