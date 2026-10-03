@@ -77,3 +77,28 @@ export interface MachineInstance {
   status: "idle" | "producing" | "full" | "no_resources";
   lastTickProcessedAt: Date; // CRITICAL for offline catch-up simulation
 }
+
+// ------------------------------------------
+// 5. REAL ESTATE & URBAN PARCELS (CapitalRift style)
+// ------------------------------------------
+export interface RealEstateProperty {
+  id: EntityId;
+  name: string;
+  address?: string;
+  coords: GeoCoordinates;
+  polygon?: GeoCoordinates[];
+  areaSqm: number;
+  heightMeters: number;
+  levels?: number;
+  buildingType: string; // "commercial" | "office" | "residential" | "industrial" | "demolished" | "hq"
+  ownerId: EntityId | null; // null = disponible para adquisición
+  ownerName?: string;
+  price: number;
+  monthlyRevenue: number;
+  status: "available" | "owned" | "demolished" | "under_construction" | "facility_active";
+  facilityType?: string | null; // "coal_mine" | "iron_mine" | "smelter" | "power_substation" | "logistics_hub" | "tech_hq"
+  tier?: number;
+  customNotes?: string;
+  createdAt?: Date;
+}
+

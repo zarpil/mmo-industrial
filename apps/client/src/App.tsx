@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { Player, MachineInstance } from '@mmo/shared';
+import type { Player, MachineInstance, RealEstateProperty } from '@mmo/shared';
 
 // MapLibre desde el CDN en index.html
 declare const maplibregl: any;
@@ -60,6 +60,25 @@ const COMMODITIES: Commodity[] = [
   { id: 'power_mwh', name: 'Energía Eléctrica', unit: 'MWh', price: 42, change: -0.8, icon: '⚡' },
 ];
 
+// Opciones de Reconversión / Edificación tras demoler o en solar
+interface FacilityOption {
+  id: string;
+  name: string;
+  icon: string;
+  cost: number;
+  revenueBonus: number;
+  desc: string;
+}
+
+const FACILITY_OPTIONS: FacilityOption[] = [
+  { id: 'corp_hq', name: 'Sede Corporativa Central', icon: '🏢', cost: 800, revenueBonus: 65, desc: 'Genera 65€/tick por alquiler corporativo y expande el límite de red.' },
+  { id: 'deep_mine', name: 'Pozo Minero Profundo', icon: '⛏️', cost: 450, revenueBonus: 35, desc: 'Extracción subterránea automatizada de minerales de alta ley.' },
+  { id: 'urban_foundry', name: 'Fundición Metalúrgica', icon: '🔥', cost: 650, revenueBonus: 50, desc: 'Horno de arco eléctrico para transformación pesada.' },
+  { id: 'power_substation', name: 'Subestación Eléctrica', icon: '⚡', cost: 500, revenueBonus: 40, desc: 'Añade +40 MW de capacidad a la red eléctrica regional.' },
+  { id: 'tech_tower', name: 'Torre de Oficinas I+D', icon: '🏙️', cost: 1200, revenueBonus: 95, desc: 'Alquiler tecnológico y patentes industriales (+95€/tick).' },
+  { id: 'logistics_depot', name: 'Centro Logístico y Distribución', icon: '🚚', cost: 700, revenueBonus: 55, desc: 'Almacén de aduana con acceso directo a vías rápidas.' },
+];
+
 export default function App() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<any>(null);
@@ -71,15 +90,25 @@ export default function App() {
   const [machine, setMachine] = useState<MachineInstance | null>(null);
   const [inventoryStock, setInventoryStock] = useState<Record<string, number>>({ coal_ore: 15 });
 
+  // Propiedades Inmobiliarias Reales (sincronizadas con el servidor)
+  const [properties, setProperties] = useState<RealEstateProperty[]>([]);
+  const propertiesRef = useRef<RealEstateProperty[]>([]);
+  propertiesRef.current = properties;
+  const propertyMarkersRef = useRef<any[]>([]);
+
+  // Selección de Edificio / Parcela Real
+  const [selectedProperty, setSelectedProperty] = useState<RealEstateProperty | null>(null);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+
   // Coordenadas de la fábrica principal del jugador (Madrid AZCA por defecto)
-  const [factoryCoords, setFactoryCoords] = useState<[number, number]>([-3.6917, 40.4500]);
+  const [factoryCoords] = useState<[number, number]>([-3.6917, 40.4500]);
   const factoryMarkerRef = useRef<any>(null);
 
   // Interacción UI
   const [selectedHub, setSelectedHub] = useState('madrid');
-  const [activeTab, setActiveTab] = useState<'overview' | 'market' | 'factory' | 'parcels'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'market' | 'factory' | 'properties'>('overview');
   const [visualMode, setVisualMode] = useState<'satellite' | 'realistic' | 'dark'>('satellite');
-  const [selectedParcel, setSelectedParcel] = useState<{ lat: number; lng: number; area: number; zone: string; price: number } | null>(null);
   const [buildingMode, setBuildingMode] = useState<BuildableBlueprint | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -88,7 +117,7 @@ export default function App() {
   const [floatingPill, setFloatingPill] = useState<string | null>(null);
 
   // Reproductor de sonido sintetizado para inmersión
-  const playSound = useCallback((type: 'click' | 'produce' | 'build' | 'cash') => {
+  const playSound = useCallback((type: 'click' | 'produce' | 'build' | 'cash' | 'demolish') => {
     if (!soundEnabled) return;
     try {
       if (!audioCtxRef.current) {
@@ -130,9 +159,17 @@ export default function App() {
         gain.gain.linearRampToValueAtTime(0.001, now + 0.2);
         osc.start(now);
         osc.stop(now + 0.2);
+      } else if (type === 'demolish') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(180, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.35);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.35);
+        osc.start(now);
+        osc.stop(now + 0.35);
       }
     } catch {
-      // Audio fallback silencioso
+      // Silencioso si falla
     }
   }, [soundEnabled]);
 
@@ -272,20 +309,87 @@ export default function App() {
         console.warn('⚠️ No se pudo inyectar buildings-3d:', err);
       }
 
-      // ── D. Clic en el mapa para inspeccionar parcelas o construir ──
+      // ── F. Hover Interactivo con Cursor Puntero sobre Edificios ──
+      m.on('mousemove', (e: any) => {
+        const features = m.queryRenderedFeatures(e.point, { layers: ['buildings-3d'] });
+        m.getCanvas().style.cursor = features.length > 0 ? 'pointer' : '';
+      });
+
+      // ── G. Selección y Consulta de Datos Reales de Edificios / Parcelas ──
       m.on('click', (e: any) => {
+        const buildingFeatures = m.queryRenderedFeatures(e.point, { layers: ['buildings-3d'] });
         const coords = e.lngLat;
         const lat = parseFloat(coords.lat.toFixed(5));
         const lng = parseFloat(coords.lng.toFixed(5));
 
-        setSelectedParcel({
-          lat,
-          lng,
-          area: Math.floor(800 + Math.random() * 1200),
-          zone: Math.random() > 0.4 ? 'Zona Industrial Pesada (Z-I)' : 'Parque Tecnológico / Logístico',
-          price: 250,
-        });
+        if (buildingFeatures && buildingFeatures.length > 0) {
+          const feat = buildingFeatures[0];
+          const p = feat.properties || {};
+          const height = Math.round(p.render_height || p.height || 32);
+          const levels = p.levels || Math.max(1, Math.round(height / 3.4));
+          const buildingType = p.building || p.type || 'office';
+          const osmName = p.name || p['name:es'] || p['name:en'];
+          const propId = `bldg-${feat.id || Math.abs(Math.round(lat * 100000) ^ Math.round(lng * 100000))}`;
 
+          // Comprobar si ya existe en el estado de propiedades del servidor
+          const existing = propertiesRef.current.find(
+            item => item.id === propId || (Math.abs(item.coords.lat - lat) < 0.0003 && Math.abs(item.coords.lng - lng) < 0.0003)
+          );
+
+          if (existing) {
+            setSelectedProperty(existing);
+            setNameInput(existing.name);
+          } else {
+            const area = Math.round(levels * (220 + height * 5));
+            const price = Math.round(450 + height * 18 + area * 0.12);
+            const newProp: RealEstateProperty = {
+              id: propId,
+              name: osmName || `Edificio Comercial #${propId.slice(-4)}`,
+              address: `Zona Financiera (${lat}, ${lng})`,
+              coords: { lat, lng },
+              areaSqm: area,
+              heightMeters: height,
+              levels: levels,
+              buildingType: buildingType,
+              ownerId: null,
+              price: price,
+              monthlyRevenue: Math.round(price * 0.06),
+              status: 'available',
+              tier: 1,
+            };
+            setSelectedProperty(newProp);
+            setNameInput(newProp.name);
+          }
+        } else {
+          // Clic sobre terreno / solar
+          const parcelId = `parcel-${Math.abs(Math.round(lat * 100000) ^ Math.round(lng * 100000))}`;
+          const existing = propertiesRef.current.find(item => item.id === parcelId);
+          if (existing) {
+            setSelectedProperty(existing);
+            setNameInput(existing.name);
+          } else {
+            const area = Math.floor(700 + Math.random() * 1200);
+            const price = 250;
+            const newProp: RealEstateProperty = {
+              id: parcelId,
+              name: `Solar Despejado #${parcelId.slice(-4)}`,
+              address: `Coordenadas Catastrales (${lat}, ${lng})`,
+              coords: { lat, lng },
+              areaSqm: area,
+              heightMeters: 0,
+              levels: 0,
+              buildingType: 'industrial',
+              ownerId: null,
+              price: price,
+              monthlyRevenue: 20,
+              status: 'available',
+              tier: 1,
+            };
+            setSelectedProperty(newProp);
+            setNameInput(newProp.name);
+          }
+        }
+        setIsEditingName(false);
         playSound('click');
       });
 
@@ -336,7 +440,61 @@ export default function App() {
     };
   }, [mapReady, factoryCoords, playSound]);
 
-  // ── 3. WebSocket & Persistencia con el Servidor ───────────────────
+  // ── 3. Marcadores 3D para Propiedades Adquiridas y Solares Demolidos ─
+  useEffect(() => {
+    if (!mapReady || !map.current) return;
+
+    // Limpiar marcadores anteriores
+    propertyMarkersRef.current.forEach(m => m.remove());
+    propertyMarkersRef.current = [];
+
+    properties.forEach(prop => {
+      const isPlayerOwned = prop.ownerId === player?.id;
+      if (!isPlayerOwned) return;
+
+      const el = document.createElement('div');
+      el.className = 'owned-property-marker';
+
+      if (prop.status === 'demolished') {
+        el.innerHTML = `
+          <div class="demolished-site-badge">
+            <span>🚧</span>
+            <span>SOLAR DEMOLIDO: ${prop.name}</span>
+          </div>
+        `;
+      } else if (prop.status === 'facility_active') {
+        el.innerHTML = `
+          <div class="owned-property-badge" style="background: linear-gradient(135deg, #ea580c, #f97316); border-color: #fdba74;">
+            <span>🏭</span>
+            <span>${prop.name} (+${prop.monthlyRevenue}€)</span>
+          </div>
+        `;
+      } else {
+        el.innerHTML = `
+          <div class="owned-property-badge">
+            <span>👑</span>
+            <span>${prop.name} (+${prop.monthlyRevenue}€)</span>
+          </div>
+        `;
+      }
+
+      el.onclick = (e) => {
+        e.stopPropagation();
+        setSelectedProperty(prop);
+        setNameInput(prop.name);
+        setIsEditingName(false);
+        playSound('click');
+      };
+
+      const m = new maplibregl.Marker({ element: el })
+        .setLngLat([prop.coords.lng, prop.coords.lat])
+        .addTo(map.current);
+
+      propertyMarkersRef.current.push(m);
+    });
+  }, [mapReady, properties, player?.id, playSound]);
+
+  // ── 4. WebSocket & Persistencia con el Servidor ───────────────────
   useEffect(() => {
     if (socket.connected) {
       setConnected(true);
@@ -355,9 +513,18 @@ export default function App() {
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
 
-    socket.on('gameState', (data: { player: Player; machine: MachineInstance }) => {
+    socket.on('gameState', (data: { player: Player; machine: MachineInstance; properties?: RealEstateProperty[] }) => {
       setPlayer(data.player);
       setMachine(data.machine);
+
+      if (data.properties) {
+        setProperties(data.properties);
+        // Si la propiedad actualmente abierta se actualizó en el servidor, refrescarla
+        if (selectedProperty) {
+          const updated = data.properties.find(p => p.id === selectedProperty.id);
+          if (updated) setSelectedProperty(updated);
+        }
+      }
 
       // Actualizar inventario
       const coalSlot = data.machine.inventory.slots.find(s => s.itemId === 'coal_ore');
@@ -377,7 +544,7 @@ export default function App() {
       socket.off('disconnect', onDisconnect);
       socket.off('gameState');
     };
-  }, [playSound]);
+  }, [playSound, selectedProperty]);
 
   // Acción: Venta de recursos al mercado
   const handleSellResource = useCallback((itemKey: string, pricePerUnit: number) => {
@@ -387,7 +554,6 @@ export default function App() {
     if (itemKey === 'coal_ore') {
       socket.emit('sellCoal');
     } else {
-      // Simulación local para otros recursos
       const totalEarned = qty * pricePerUnit;
       setPlayer(prev => prev ? { ...prev, money: prev.money + totalEarned } : null);
       setInventoryStock(prev => ({ ...prev, [itemKey]: 0 }));
@@ -503,52 +669,109 @@ export default function App() {
     }
   };
 
-  // Acción: Construir en la parcela seleccionada
-  const handleConfirmBuild = () => {
-    if (!selectedParcel || !player) return;
-    const cost = buildingMode ? buildingMode.cost : selectedParcel.price;
+  // ── 5. Acciones Inmobiliarias & Demolición ─────────────────────────
 
-    if (player.money < cost) {
-      alert('¡Capital insuficiente! Vende carbón o recursos primero.');
+  // Compra de Edificio / Parcela Real
+  const handleBuyProperty = () => {
+    if (!selectedProperty || !player) return;
+    if (player.money < selectedProperty.price) {
+      alert(`Capital insuficiente. Necesitas ${selectedProperty.price} € para adquirir esta propiedad.`);
+      return;
+    }
+
+    playSound('cash');
+    socket.emit('buyProperty', selectedProperty);
+    setFloatingPill(`¡Edificio Adquirido!`);
+    setTimeout(() => setFloatingPill(null), 3000);
+  };
+
+  // Demoler Edificio
+  const handleDemolishProperty = () => {
+    if (!selectedProperty || !player) return;
+    const demolitionCost = 150;
+    if (player.money < demolitionCost) {
+      alert(`Necesitas ${demolitionCost} € para costes de demolición y desescombro.`);
+      return;
+    }
+
+    if (!confirm(`¿Confirmas la demolición de ${selectedProperty.name}? La estructura actual será derribada para dejar un solar limpio.`)) {
+      return;
+    }
+
+    playSound('demolish');
+    socket.emit('demolishProperty', { propertyId: selectedProperty.id });
+    setFloatingPill(`🔨 Edificio Demolido`);
+    setTimeout(() => setFloatingPill(null), 3000);
+  };
+
+  // Construir Instalación sobre Solar
+  const handleConstructFacility = (facility: FacilityOption) => {
+    if (!selectedProperty || !player) return;
+    if (player.money < facility.cost) {
+      alert(`Capital insuficiente para construir ${facility.name} (Requiere ${facility.cost} €).`);
       return;
     }
 
     playSound('build');
-    setPlayer(prev => prev ? { ...prev, money: prev.money - cost } : null);
-    setFactoryCoords([selectedParcel.lng, selectedParcel.lat]);
-    setBuildingMode(null);
-    setSelectedParcel(null);
+    socket.emit('constructFacility', {
+      propertyId: selectedProperty.id,
+      facilityType: facility.id,
+      name: `${facility.name} - ${selectedProperty.name.replace('Solar Despejado', '').trim()}`,
+      cost: facility.cost,
+    });
+    setFloatingPill(`🏗️ ¡${facility.name} Construida!`);
+    setTimeout(() => setFloatingPill(null), 3000);
+  };
 
-    // Centrar suavemente en la nueva fábrica
+  // Renombrar / Editar Nombre de la Propiedad
+  const handleSaveName = () => {
+    if (!selectedProperty || !nameInput.trim()) return;
+    playSound('click');
+    socket.emit('renameProperty', {
+      propertyId: selectedProperty.id,
+      newName: nameInput.trim(),
+    });
+    setIsEditingName(false);
+  };
+
+  // Centrar cámara en una propiedad
+  const flyToProperty = (prop: RealEstateProperty) => {
+    playSound('click');
+    setSelectedProperty(prop);
+    setNameInput(prop.name);
     map.current?.flyTo({
-      center: [selectedParcel.lng, selectedParcel.lat],
-      zoom: 17,
+      center: [prop.coords.lng, prop.coords.lat],
+      zoom: 17.2,
       pitch: 65,
-      duration: 2000,
+      bearing: -15,
+      duration: 2500,
     });
   };
 
   const coalAmount = inventoryStock.coal_ore || 0;
+  const isSelectedOwnedByPlayer = selectedProperty?.ownerId === player?.id;
+  const ownedProperties = properties.filter(p => p.ownerId === player?.id);
+  const totalPassiveRevenue = ownedProperties.reduce((acc, p) => acc + (p.status !== 'demolished' ? p.monthlyRevenue : 0), 0);
 
   return (
     <div className="game-viewport">
       {/* 1. Canvas del Mapa 3D */}
       <div ref={mapContainer} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />
 
-      {/* Viñeta atmosférica para inmersión */}
+      {/* Viñeta atmosférica sutil */}
       <div className="map-vignette" />
 
-      {/* Pill flotante de producción */}
+      {/* Pill flotante de producción / eventos */}
       {floatingPill && (
         <div style={{
           position: 'absolute', top: 110, left: '50%', transform: 'translateX(-50%)',
-          background: 'rgba(234, 88, 12, 0.95)', color: '#fff', padding: '8px 22px',
+          background: 'linear-gradient(135deg, #ea580c, #f97316)', color: '#fff', padding: '8px 24px',
           borderRadius: 24, fontWeight: 800, fontSize: 14, letterSpacing: 1,
           boxShadow: '0 0 25px rgba(234, 88, 12, 0.8), 0 4px 15px rgba(0,0,0,0.5)',
           zIndex: 1000, pointerEvents: 'none',
           animation: 'beacon-pulse 1s infinite alternate',
         }}>
-          ⛏️ {floatingPill}
+          {floatingPill}
         </div>
       )}
 
@@ -582,7 +805,7 @@ export default function App() {
 
         {/* Global Financial & Grid Stats */}
         <div className="glass-panel" style={{
-          padding: '8px 24px', display: 'flex', alignItems: 'center', gap: 28,
+          padding: '8px 24px', display: 'flex', alignItems: 'center', gap: 24,
         }}>
           {/* Capital */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -590,7 +813,20 @@ export default function App() {
             <div>
               <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>Capital Líquido</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: '#facc15', fontFamily: 'Chakra Petch' }}>
-                {player ? Number(player.money).toLocaleString('es-ES') : '500'} €
+                {player ? Number(player.money).toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '500'} €
+              </div>
+            </div>
+          </div>
+
+          <div style={{ width: 1, height: 32, background: 'rgba(56, 189, 248, 0.2)' }} />
+
+          {/* Renta Inmobiliaria Pasiva */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 24 }}>🏢</span>
+            <div>
+              <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>Renta Pasiva</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#4ade80', fontFamily: 'Chakra Petch' }}>
+                +{totalPassiveRevenue} <span style={{ fontSize: 11, color: '#94a3b8' }}>€/mes</span>
               </div>
             </div>
           </div>
@@ -705,15 +941,16 @@ export default function App() {
         </div>
       </header>
 
-      {/* 3. Panel Lateral Izquierdo: Gestión de Factoría & Mercados */}
+      {/* 3. Panel Lateral Izquierdo: Gestión de Factoría, Mercados y Propiedades */}
       <aside style={{
-        position: 'absolute', top: 90, left: 20, width: 340, zIndex: 90,
+        position: 'absolute', top: 90, left: 20, width: 360, zIndex: 90,
         display: 'flex', flexDirection: 'column', gap: 12, pointerEvents: 'auto',
       }}>
         {/* Navigation Tabs */}
         <div className="glass-panel" style={{ display: 'flex', padding: 4 }}>
           {[
             { id: 'overview', label: 'Resumen', icon: '📊' },
+            { id: 'properties', label: `Inmuebles (${ownedProperties.length})`, icon: '🏢' },
             { id: 'factory', label: 'Fábrica', icon: '🏭' },
             { id: 'market', label: 'Mercado', icon: '📈' },
           ].map(tab => (
@@ -724,8 +961,8 @@ export default function App() {
                 flex: 1, padding: '8px 0', border: 'none', borderRadius: 8,
                 background: activeTab === tab.id ? 'rgba(56, 189, 248, 0.2)' : 'transparent',
                 color: activeTab === tab.id ? '#38bdf8' : '#94a3b8',
-                fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                fontWeight: 700, fontSize: 11, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
                 transition: 'all 0.2s',
               }}
             >
@@ -787,14 +1024,66 @@ export default function App() {
 
             {/* Quick Guía Controls */}
             <div style={{ borderTop: '1px solid rgba(56, 189, 248, 0.15)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 1 }}>Controles de Cámara 3D</div>
+              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 1 }}>Interacción Inmobiliaria 3D</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 11 }}>
-                <span style={{ color: '#94a3b8' }}>🖱️ Click Izq: Mover</span>
-                <span style={{ color: '#94a3b8' }}>🖱️ Click Der: Rotar 3D</span>
-                <span style={{ color: '#94a3b8' }}>🔍 Rueda: Zoom</span>
-                <span style={{ color: '#94a3b8' }}>🏢 Click Edificio: Parcela</span>
+                <span style={{ color: '#94a3b8' }}>🏢 Click en Edificio 3D</span>
+                <span style={{ color: '#94a3b8' }}>🛒 Comprar / Reclamar</span>
+                <span style={{ color: '#94a3b8' }}>🔨 Demoler Estructura</span>
+                <span style={{ color: '#94a3b8' }}>🏗️ Construir Complejos</span>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Tab Content: PROPIEDADES INMOBILIARIAS DEL JUGADOR */}
+        {activeTab === 'properties' && (
+          <div className="glass-panel" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc' }}>Tus Inmuebles y Solares</span>
+              <span style={{ fontSize: 11, color: '#4ade80', fontWeight: 700 }}>+{totalPassiveRevenue} €/mes</span>
+            </div>
+
+            {ownedProperties.length === 0 ? (
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.6)', borderRadius: 8, padding: 16,
+                textAlign: 'center', color: '#94a3b8', fontSize: 12, border: '1px dashed rgba(56, 189, 248, 0.2)',
+              }}>
+                Aún no posees ningún inmueble o parcela. Haz clic sobre cualquier edificio 3D del mapa para consultar su valoración catastral y adquirirlo.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 360, overflowY: 'auto' }}>
+                {ownedProperties.map(p => (
+                  <div
+                    key={p.id}
+                    onClick={() => flyToProperty(p)}
+                    style={{
+                      background: selectedProperty?.id === p.id ? 'rgba(56, 189, 248, 0.2)' : 'rgba(15, 23, 42, 0.7)',
+                      border: selectedProperty?.id === p.id ? '1px solid #38bdf8' : '1px solid rgba(56, 189, 248, 0.12)',
+                      borderRadius: 8, padding: 10, cursor: 'pointer', transition: 'all 0.2s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ fontWeight: 700, fontSize: 12, color: '#f8fafc' }}>
+                        {p.status === 'demolished' ? '🚧 ' : p.status === 'facility_active' ? '🏭 ' : '🏢 '}
+                        {p.name}
+                      </div>
+                      <span style={{
+                        fontSize: 10, padding: '2px 6px', borderRadius: 4, fontWeight: 700,
+                        background: p.status === 'demolished' ? 'rgba(234, 88, 12, 0.3)' : 'rgba(34, 197, 94, 0.2)',
+                        color: p.status === 'demolished' ? '#fdba74' : '#4ade80',
+                      }}>
+                        {p.status === 'demolished' ? 'Solar en Obras' : `+${p.monthlyRevenue}€/mes`}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10, color: '#64748b' }}>
+                      <span>{p.areaSqm} m² {p.heightMeters > 0 ? `| ${p.heightMeters}m (${p.levels} pl.)` : '| Terreno libre'}</span>
+                      <span style={{ color: '#38bdf8' }}>Centrar Cámara ↗</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -833,7 +1122,7 @@ export default function App() {
                   <span style={{ fontSize: 18 }}>🔥</span>
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>Fundición de Acero</div>
-                    <div style={{ fontSize: 10, color: '#94a3b8' }}>Requiere desbloquear (€500)</div>
+                    <div style={{ fontSize: 10, color: '#94a3b8' }}>Requiere solar o reconversión</div>
                   </div>
                 </div>
                 <div style={{ fontSize: 12, color: '#64748b' }}>Bloqueado</div>
@@ -906,63 +1195,211 @@ export default function App() {
         )}
       </aside>
 
-      {/* 4. Modal de Parcela Seleccionada en el Mapa 3D */}
-      {selectedParcel && (
+      {/* 4. Modal Inspector Catastral & Inmobiliario Complejo (Edificios / Parcelas 3D) */}
+      {selectedProperty && (
         <div className="glass-panel glass-panel-glow" style={{
-          position: 'absolute', top: 90, right: 20, width: 320, zIndex: 90,
-          padding: 20, display: 'flex', flexDirection: 'column', gap: 14, pointerEvents: 'auto',
+          position: 'absolute', top: 90, right: 20, width: 380, zIndex: 90,
+          padding: 22, display: 'flex', flexDirection: 'column', gap: 14, pointerEvents: 'auto',
+          maxHeight: '85vh', overflowY: 'auto',
         }}>
+          {/* Cabecera y Estado de Titularidad */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <div style={{ fontSize: 10, color: '#38bdf8', fontWeight: 700, letterSpacing: 1.5, textTransform: 'uppercase' }}>
-                Parcela Geográfica
+            <div style={{ flex: 1, marginRight: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <span style={{
+                  fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 800, textTransform: 'uppercase',
+                  background: isSelectedOwnedByPlayer ? 'linear-gradient(135deg, #0284c7, #2563eb)' : 'rgba(100, 116, 139, 0.3)',
+                  color: isSelectedOwnedByPlayer ? '#fff' : '#94a3b8',
+                }}>
+                  {isSelectedOwnedByPlayer ? '👑 Tu Propiedad' : '🏛️ Finca Registral Disponible'}
+                </span>
+                {selectedProperty.status === 'demolished' && (
+                  <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 800, background: '#ea580c', color: '#fff' }}>
+                    🚧 Solar Demolido
+                  </span>
+                )}
               </div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: '#f8fafc' }}>
-                {selectedParcel.zone}
-              </div>
+
+              {/* Título editable si es propiedad del jugador */}
+              {isEditingName ? (
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <input
+                    type="text"
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    style={{
+                      flex: 1, background: '#0f172a', border: '1px solid #38bdf8', borderRadius: 4,
+                      color: '#fff', padding: '4px 8px', fontSize: 13, fontWeight: 700,
+                    }}
+                  />
+                  <button
+                    onClick={handleSaveName}
+                    style={{ background: '#0284c7', border: 'none', color: '#fff', borderRadius: 4, padding: '0 8px', cursor: 'pointer', fontWeight: 700 }}
+                  >
+                    OK
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#f8fafc' }}>
+                    {selectedProperty.name}
+                  </h3>
+                  {isSelectedOwnedByPlayer && (
+                    <button
+                      onClick={() => setIsEditingName(true)}
+                      title="Editar Nombre del Inmueble"
+                      style={{ background: 'transparent', border: 'none', color: '#38bdf8', cursor: 'pointer', fontSize: 14 }}
+                    >
+                      ✏️
+                    </button>
+                  )}
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{selectedProperty.address}</div>
             </div>
+
             <button
-              onClick={() => setSelectedParcel(null)}
+              onClick={() => setSelectedProperty(null)}
               style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer' }}
             >
               ✕
             </button>
           </div>
 
-          <div style={{ background: 'rgba(15, 23, 42, 0.7)', borderRadius: 8, padding: 12, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* Ficha Técnica del Edificio OSM */}
+          <div style={{
+            background: 'rgba(15, 23, 42, 0.75)', borderRadius: 10, padding: 14,
+            fontSize: 12, display: 'flex', flexDirection: 'column', gap: 8, border: '1px solid rgba(56, 189, 248, 0.15)',
+          }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: '#94a3b8' }}>Coordenadas:</span>
-              <span style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{selectedParcel.lat}, {selectedParcel.lng}</span>
+              <span style={{ color: '#94a3b8' }}>Superficie Catastral:</span>
+              <span style={{ color: '#e2e8f0', fontWeight: 700 }}>{selectedProperty.areaSqm.toLocaleString()} m²</span>
             </div>
+
+            {selectedProperty.heightMeters > 0 && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Altura de Fachada:</span>
+                  <span style={{ color: '#38bdf8', fontWeight: 700 }}>{selectedProperty.heightMeters} metros</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Número de Plantas:</span>
+                  <span style={{ color: '#e2e8f0' }}>{selectedProperty.levels} plantas sobre rasante</span>
+                </div>
+              </>
+            )}
+
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: '#94a3b8' }}>Superficie:</span>
-              <span style={{ color: '#e2e8f0' }}>{selectedParcel.area} m²</span>
+              <span style={{ color: '#94a3b8' }}>Calificación de Uso:</span>
+              <span style={{ color: '#e2e8f0', textTransform: 'capitalize' }}>
+                {selectedProperty.buildingType === 'office' ? 'Oficinas y Terciario' :
+                 selectedProperty.buildingType === 'commercial' ? 'Comercial e Industrial' :
+                 selectedProperty.buildingType === 'demolished' ? 'Solar Limpio / Sin Edificar' : 'Uso Mixto'}
+              </span>
             </div>
+
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: '#94a3b8' }}>Riqueza Mineral:</span>
-              <span style={{ color: '#4ade80', fontWeight: 700 }}>Carbón (Alta pureza)</span>
+              <span style={{ color: '#94a3b8' }}>Rendimiento Pasivo:</span>
+              <span style={{ color: '#4ade80', fontWeight: 800 }}>+{selectedProperty.monthlyRevenue} € / mes</span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ color: '#94a3b8' }}>Coordenadas GPS:</span>
+              <span style={{ color: '#94a3b8', fontFamily: 'monospace', fontSize: 11 }}>
+                {selectedProperty.coords.lat.toFixed(5)}, {selectedProperty.coords.lng.toFixed(5)}
+              </span>
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase' }}>Coste de Adquisición</div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: '#facc15', fontFamily: 'Chakra Petch' }}>
-                {buildingMode ? buildingMode.cost : selectedParcel.price} €
+          {/* ACCIONES DISPONIBLES */}
+
+          {/* 1. Caso: Disponible para Compra */}
+          {!isSelectedOwnedByPlayer && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+              <div>
+                <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase' }}>Valor de Adquisición</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: '#facc15', fontFamily: 'Chakra Petch' }}>
+                  {selectedProperty.price.toLocaleString()} €
+                </div>
+              </div>
+
+              <button
+                onClick={handleBuyProperty}
+                style={{
+                  padding: '12px 20px', borderRadius: 8, border: 'none',
+                  background: 'linear-gradient(135deg, #0284c7, #2563eb)',
+                  color: '#fff', fontSize: 13, fontWeight: 800, textTransform: 'uppercase',
+                  cursor: 'pointer', boxShadow: '0 0 16px rgba(37, 99, 235, 0.5)',
+                  letterSpacing: 0.5,
+                }}
+              >
+                🛒 Comprar Inmueble
+              </button>
+            </div>
+          )}
+
+          {/* 2. Caso: Propiedad del Jugador (Demoler, Editar o Construir) */}
+          {isSelectedOwnedByPlayer && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
+              {/* Botón de Demolición si el edificio aún existe */}
+              {selectedProperty.status !== 'demolished' && (
+                <div style={{
+                  background: 'rgba(234, 88, 12, 0.1)', border: '1px solid rgba(234, 88, 12, 0.3)',
+                  borderRadius: 8, padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#fdba74' }}>Derribo y Demolición</div>
+                    <div style={{ fontSize: 10, color: '#94a3b8' }}>Demuele la estructura para edificar una factoría</div>
+                  </div>
+
+                  <button
+                    onClick={handleDemolishProperty}
+                    style={{
+                      background: 'linear-gradient(135deg, #ea580c, #c2410c)',
+                      border: 'none', color: '#fff', borderRadius: 6, padding: '8px 14px',
+                      fontSize: 12, fontWeight: 800, cursor: 'pointer',
+                    }}
+                  >
+                    🔨 Demoler (150€)
+                  </button>
+                </div>
+              )}
+
+              {/* Opciones de Construcción sobre el solar despejado */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: 1 }}>
+                  🏗️ {selectedProperty.status === 'demolished' ? 'Edificar en el Solar Limpio' : 'Reconvertir Instalación'}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  {FACILITY_OPTIONS.map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => handleConstructFacility(f)}
+                      title={f.desc}
+                      style={{
+                        background: 'rgba(15, 23, 42, 0.8)',
+                        border: '1px solid rgba(56, 189, 248, 0.2)',
+                        borderRadius: 8, padding: '10px 8px', textAlign: 'left',
+                        cursor: 'pointer', transition: 'all 0.2s', display: 'flex', flexDirection: 'column', gap: 4,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 18 }}>{f.icon}</span>
+                        <span style={{ fontSize: 10, color: '#facc15', fontWeight: 800, fontFamily: 'Chakra Petch' }}>{f.cost}€</span>
+                      </div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {f.name}
+                      </div>
+                      <div style={{ fontSize: 9, color: '#4ade80', fontWeight: 600 }}>
+                        +{f.revenueBonus} €/mes
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-            <button
-              onClick={handleConfirmBuild}
-              style={{
-                padding: '10px 18px', borderRadius: 8, border: 'none',
-                background: 'linear-gradient(135deg, #f97316, #ea580c)',
-                color: '#fff', fontSize: 13, fontWeight: 800, textTransform: 'uppercase',
-                cursor: 'pointer', boxShadow: '0 0 16px rgba(249, 115, 22, 0.5)',
-              }}
-            >
-              {buildingMode ? `Instalar ${buildingMode.name}` : 'Reclamar Parcela'}
-            </button>
-          </div>
+          )}
         </div>
       )}
 

@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import type { Player, MachineInstance } from '@mmo/shared';
+import type { Player, MachineInstance, RealEstateProperty } from '@mmo/shared';
 import { simulateMachineCatchup } from './simulation';
 import { initDb, pool, isDbConnected } from './db';
 
@@ -25,6 +25,40 @@ let globalMachine: MachineInstance = {
   status: 'producing',
   lastTickProcessedAt: new Date(),
 };
+
+// Catálogo y propiedades urbanas activas
+let globalProperties: RealEstateProperty[] = [
+  {
+    id: 'prop-azca-picasso',
+    name: 'Torre Picasso / Complejo AZCA #1',
+    address: 'Plaza Pablo Ruiz Picasso 1, Madrid',
+    coords: { lat: 40.4503, lng: -3.6928 },
+    areaSqm: 2450,
+    heightMeters: 156,
+    levels: 43,
+    buildingType: 'office',
+    ownerId: null,
+    price: 1500,
+    monthlyRevenue: 180,
+    status: 'available',
+    tier: 1,
+  },
+  {
+    id: 'prop-castellana-hub',
+    name: 'Castellana Business Center',
+    address: 'Paseo de la Castellana 89, Madrid',
+    coords: { lat: 40.4485, lng: -3.6915 },
+    areaSqm: 1800,
+    heightMeters: 110,
+    levels: 30,
+    buildingType: 'commercial',
+    ownerId: null,
+    price: 1100,
+    monthlyRevenue: 120,
+    status: 'available',
+    tier: 1,
+  }
+];
 
 // Cargar o crear el estado inicial desde PostgreSQL
 async function loadStateFromDb() {
@@ -102,11 +136,16 @@ setInterval(async () => {
   const previousInventory = JSON.stringify(globalMachine.inventory);
   
   globalMachine = simulateMachineCatchup(globalMachine, new Date());
+
+  // Renta pasiva por edificios comerciales/oficinas en propiedad
+  globalProperties
+    .filter(p => p.ownerId === globalPlayer.id && p.status !== 'demolished')
+    .forEach(p => {
+      globalPlayer.money += Number((p.monthlyRevenue / 12).toFixed(1));
+    });
   
-  if (JSON.stringify(globalMachine.inventory) !== previousInventory) {
-    await saveStateToDb(); // Persistencia!
-    io.emit('gameState', { player: globalPlayer, machine: globalMachine });
-  }
+  await saveStateToDb(); // Persistencia!
+  io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
 }, 5000);
 
 // Conexiones de clientes
@@ -118,10 +157,9 @@ io.on('connection', async (socket) => {
   }
   
   if (globalMachine) {
-    // Forzar un catchup para el tiempo en el que nadie estuvo conectado
     globalMachine = simulateMachineCatchup(globalMachine, new Date());
     await saveStateToDb();
-    socket.emit('gameState', { player: globalPlayer, machine: globalMachine });
+    socket.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
   }
 
   socket.on('sellCoal', async () => {
@@ -137,9 +175,89 @@ io.on('connection', async (socket) => {
       globalMachine.lastTickProcessedAt = new Date();
       
       console.log(`💰 Venta (Persistida): +${ganancias}€`);
-      await saveStateToDb(); // Persistencia!
-      io.emit('gameState', { player: globalPlayer, machine: globalMachine });
+      await saveStateToDb();
+      io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
     }
+  });
+
+  // 1. Compra de Parcela / Edificio Real
+  socket.on('buyProperty', (propData: Partial<RealEstateProperty>) => {
+    if (!globalPlayer || !propData.id) return;
+    const existing = globalProperties.find(p => p.id === propData.id);
+    const price = existing ? existing.price : (propData.price || 500);
+
+    if (globalPlayer.money >= price) {
+      globalPlayer.money -= price;
+      if (existing) {
+        existing.ownerId = globalPlayer.id;
+        existing.ownerName = globalPlayer.username;
+        existing.status = 'owned';
+      } else {
+        const newProp: RealEstateProperty = {
+          id: propData.id,
+          name: propData.name || 'Propiedad Inmobiliaria',
+          address: propData.address || `${propData.coords?.lat.toFixed(4)}, ${propData.coords?.lng.toFixed(4)}`,
+          coords: propData.coords || { lat: 40.45, lng: -3.69 },
+          areaSqm: propData.areaSqm || 1200,
+          heightMeters: propData.heightMeters || 45,
+          levels: propData.levels || 12,
+          buildingType: propData.buildingType || 'commercial',
+          ownerId: globalPlayer.id,
+          ownerName: globalPlayer.username,
+          price,
+          monthlyRevenue: Math.floor(price * 0.08),
+          status: 'owned',
+          tier: 1,
+          createdAt: new Date(),
+        };
+        globalProperties.push(newProp);
+      }
+      console.log(`🏢 Propiedad Adquirida: ${propData.id} por ${globalPlayer.username}`);
+      saveStateToDb();
+      io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
+    }
+  });
+
+  // 2. Demoler Edificio
+  socket.on('demolishProperty', ({ propertyId }: { propertyId: string }) => {
+    const prop = globalProperties.find(p => p.id === propertyId);
+    if (!prop || prop.ownerId !== globalPlayer.id) return;
+    const demolitionCost = 150;
+    if (globalPlayer.money >= demolitionCost) {
+      globalPlayer.money -= demolitionCost;
+      prop.status = 'demolished';
+      prop.buildingType = 'demolished';
+      prop.heightMeters = 0;
+      prop.monthlyRevenue = 0;
+      console.log(`🔨 Demolición completada en: ${propertyId}`);
+      saveStateToDb();
+      io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
+    }
+  });
+
+  // 3. Construir Complejo Industrial sobre solar
+  socket.on('constructFacility', ({ propertyId, facilityType, name, cost }: { propertyId: string; facilityType: string; name: string; cost: number }) => {
+    const prop = globalProperties.find(p => p.id === propertyId);
+    if (!prop || prop.ownerId !== globalPlayer.id) return;
+    if (globalPlayer.money >= cost) {
+      globalPlayer.money -= cost;
+      prop.status = 'facility_active';
+      prop.facilityType = facilityType;
+      prop.name = name;
+      prop.monthlyRevenue = Math.floor(cost * 0.15);
+      console.log(`🏗️ Nueva Instalación construida en: ${propertyId} (${facilityType})`);
+      saveStateToDb();
+      io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
+    }
+  });
+
+  // 4. Renombrar / Editar Propiedad
+  socket.on('renameProperty', ({ propertyId, newName }: { propertyId: string; newName: string }) => {
+    const prop = globalProperties.find(p => p.id === propertyId);
+    if (!prop || prop.ownerId !== globalPlayer.id) return;
+    prop.name = newName;
+    saveStateToDb();
+    io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
   });
 });
 
