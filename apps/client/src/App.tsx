@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { Player, MachineInstance, RealEstateProperty } from '@mmo/shared';
+import type { Player, MachineInstance, RealEstateProperty, ArchitecturalStyle } from '@mmo/shared';
 import type { GlobalHub, HoveredCadastralInfo, BuildableBlueprint, FacilityOption } from './types/game';
 import { STYLE_URL, MIN_ROTATE_ZOOM } from './constants/gameData';
 import { SoundService } from './services/sound';
-import { initializeMapLayers } from './services/mapLayers';
+import { initializeMapLayers, updatePlayerBuildingsLayer } from './services/mapLayers';
 import { generateQuarryCratersGeoJSON } from './services/quarryGeometry';
 import { HeaderHUD } from './components/HeaderHUD';
 import { DrawerSidebar } from './components/DrawerSidebar';
@@ -54,7 +54,7 @@ export default function App() {
   const [selectedHub, setSelectedHub] = useState('madrid');
   const [activeTab, setActiveTab] = useState<'overview' | 'market' | 'factory' | 'properties'>('overview');
   const [visualMode, setVisualMode] = useState<'satellite' | 'realistic' | 'dark'>('satellite');
-  const [terrainExaggeration, setTerrainExaggeration] = useState(2.6);
+  const [terrainExaggeration, setTerrainExaggeration] = useState(1.15);
   const [isRotationUnlocked, setIsRotationUnlocked] = useState(true);
   const [currentZoomLevel, setCurrentZoomLevel] = useState(16.2);
   const [buildingMode, setBuildingMode] = useState<BuildableBlueprint | null>(null);
@@ -77,10 +77,11 @@ export default function App() {
       style: STYLE_URL,
       center: [-3.6917, 40.4500],
       zoom: 16.2,
-      pitch: 62,
+      maxZoom: 22,
+      pitch: 58,
       bearing: -25,
       antialias: true,
-      maxPitch: 85,
+      maxPitch: 80,
     });
 
     map.current = m;
@@ -253,7 +254,7 @@ export default function App() {
         SoundService.play('click');
       });
 
-      // Control inteligente de rotación y auto-enderezado al Norte
+      // Control inteligente de rotación, pitch y auto-enderezado al Norte
       const updateRotationLock = () => {
         const z = m.getZoom();
         setCurrentZoomLevel(Number(z.toFixed(1)));
@@ -275,10 +276,22 @@ export default function App() {
             m.dragRotate.enable();
             m.touchZoomRotate.enableRotation();
           }
-          m.setMaxPitch(85);
+
+          // PREVENCIÓN DE DESAPARICIÓN DE EDIFICIOS EN ZOOM CERCANO:
+          // A zoom cercano (z >= 17), limitamos el pitch a 60° (isométrica Sims/SimCity).
+          // Un pitch excesivo (>65°-85°) hace que el plano de corte WebGL (near clipping plane)
+          // atraviese las alturas de los edificios y los oculte.
+          if (z >= 17.0) {
+            m.setMaxPitch(60);
+            if (m.getPitch() > 60) {
+              m.easeTo({ pitch: 56, duration: 350, essential: true });
+            }
+          } else {
+            m.setMaxPitch(75);
+          }
 
           if (m.getPitch() < 5) {
-            m.easeTo({ pitch: 62, duration: 700, essential: true });
+            m.easeTo({ pitch: 58, duration: 700, essential: true });
           }
         }
       };
@@ -478,6 +491,7 @@ export default function App() {
 
       if (data.properties) {
         setProperties(data.properties);
+        updatePlayerBuildingsLayer(map.current, data.properties);
         if (selectedProperty) {
           const updated = data.properties.find(p => p.id === selectedProperty.id);
           if (updated) setSelectedProperty(updated);
@@ -651,6 +665,39 @@ export default function App() {
     setIsEditingName(false);
   };
 
+  const handleAddFloor = (cost: number) => {
+    if (!selectedProperty || !player) return;
+    if (player.money < cost) {
+      showNotification(`⚠️ Fondos insuficientes (${cost.toLocaleString()} € necesarios)`, 3500);
+      return;
+    }
+    SoundService.play('build');
+    socket.emit('addBuildingFloor', { propertyId: selectedProperty.id, cost });
+    showNotification(`🏗️ ¡Nueva planta construida con éxito! (+3.5m)`, 3500);
+  };
+
+  const handleChangeBuildingStyle = (style: ArchitecturalStyle) => {
+    if (!selectedProperty || !player) return;
+    SoundService.play('click');
+    socket.emit('changeBuildingStyle', { propertyId: selectedProperty.id, style });
+    showNotification(`🎨 Fachada actualizada a estilo ${style}`, 2500);
+  };
+
+  const handleInstallFloorModule = (floorNumber: number, mod: any) => {
+    if (!selectedProperty || !player) return;
+    if (player.money < mod.cost) {
+      showNotification(`⚠️ Fondos insuficientes (${mod.cost} € necesarios)`, 3500);
+      return;
+    }
+    SoundService.play('cash');
+    socket.emit('installFloorModule', {
+      propertyId: selectedProperty.id,
+      floorNumber,
+      module: mod,
+    });
+    showNotification(`⚙️ ${mod.name} instalado en Planta ${floorNumber}`, 3500);
+  };
+
   return (
     <div className="game-viewport">
       {/* 1. Canvas del Mapa 3D */}
@@ -731,6 +778,9 @@ export default function App() {
         onBuyProperty={handleBuyProperty}
         onDemolishProperty={handleDemolishProperty}
         onConstructFacility={handleConstructFacility}
+        onAddFloor={handleAddFloor}
+        onChangeStyle={handleChangeBuildingStyle}
+        onInstallFloorModule={handleInstallFloorModule}
       />
 
       {/* 6. Barra Inferior de Fabricación */}

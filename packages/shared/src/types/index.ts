@@ -81,6 +81,38 @@ export interface MachineInstance {
 // ------------------------------------------
 // 5. REAL ESTATE & URBAN PARCELS (CapitalRift style)
 // ------------------------------------------
+
+export type ArchitecturalStyle =
+  | 'modern_glass'
+  | 'industrial_steel'
+  | 'brutalist_concrete'
+  | 'high_tech_composite'
+  | 'classic_brick';
+
+export interface FloorModule {
+  id: string;
+  name: string;
+  type: 'production' | 'storage' | 'energy' | 'office' | 'logistics';
+  efficiencyBonus: number;
+}
+
+export interface BuildingFloor {
+  floorNumber: number;
+  label: string;
+  heightMeters: number;
+  areaSqm: number;
+  modules: FloorModule[];
+  maxModules: number;
+}
+
+export interface BuildingConstructionState {
+  style: ArchitecturalStyle;
+  totalFloors: number;
+  maxFloors: number;
+  floors: BuildingFloor[];
+  lastUpgradedAt?: Date;
+}
+
 export interface RealEstateProperty {
   id: EntityId;
   name: string;
@@ -93,6 +125,7 @@ export interface RealEstateProperty {
   buildingType: string; // "commercial" | "office" | "residential" | "industrial" | "demolished" | "hq"
   ownerId: EntityId | null; // null = disponible para adquisición
   ownerName?: string;
+  deedsNumber?: string; // Título de propiedad catastral registrado
   price: number;
   monthlyRevenue: number;
   status: "available" | "owned" | "demolished" | "under_construction" | "facility_active";
@@ -102,7 +135,10 @@ export interface RealEstateProperty {
   excavationDepthMeters?: number; // Profundidad en metros bajo rasante (0 a 100m)
   excavationStage?: number; // 0: rasante, 1: desmonte -5m, 2: cantera -15m, 3: cráter -30m, 4: pozo abisal -60m
   totalMinedTons?: number; // Toneladas acumuladas extraídas
+  // Construcción modular persistente estilo Sims
+  construction?: BuildingConstructionState;
   customNotes?: string;
   createdAt?: Date;
 }
+
 

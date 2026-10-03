@@ -258,22 +258,56 @@ io.on('connection', async (socket) => {
         existing.ownerId = globalPlayer.id;
         existing.ownerName = globalPlayer.username;
         existing.status = 'owned';
+        if (!existing.deedsNumber) {
+          existing.deedsNumber = `TIT-CAT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+        }
+        if (!existing.construction) {
+          existing.construction = {
+            style: 'modern_glass',
+            totalFloors: existing.levels || 4,
+            maxFloors: 60,
+            floors: Array.from({ length: existing.levels || 4 }, (_, i) => ({
+              floorNumber: i + 1,
+              label: `Planta ${i + 1}`,
+              heightMeters: 3.5,
+              areaSqm: Math.round(existing.areaSqm / Math.max(1, existing.levels || 4)),
+              modules: [],
+              maxModules: 3,
+            })),
+          };
+        }
       } else {
+        const levels = propData.levels || 4;
+        const area = propData.areaSqm || 1200;
         const newProp: RealEstateProperty = {
           id: propData.id,
           name: propData.name || 'Propiedad Inmobiliaria',
           address: propData.address || `${propData.coords?.lat.toFixed(4)}, ${propData.coords?.lng.toFixed(4)}`,
           coords: propData.coords || { lat: 40.45, lng: -3.69 },
-          areaSqm: propData.areaSqm || 1200,
-          heightMeters: propData.heightMeters || 45,
-          levels: propData.levels || 12,
+          areaSqm: area,
+          heightMeters: propData.heightMeters || levels * 3.5,
+          levels: levels,
           buildingType: propData.buildingType || 'commercial',
           ownerId: globalPlayer.id,
           ownerName: globalPlayer.username,
+          deedsNumber: `TIT-CAT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
           price,
           monthlyRevenue: Math.floor(price * 0.08),
           status: 'owned',
           tier: 1,
+          construction: {
+            style: 'modern_glass',
+            totalFloors: levels,
+            maxFloors: 60,
+            floors: Array.from({ length: levels }, (_, i) => ({
+              floorNumber: i + 1,
+              label: `Planta ${i + 1}`,
+              heightMeters: 3.5,
+              areaSqm: Math.round(area / Math.max(1, levels)),
+              modules: [],
+              maxModules: 3,
+            })),
+          },
           createdAt: new Date(),
         };
         globalProperties.push(newProp);
@@ -295,6 +329,7 @@ io.on('connection', async (socket) => {
       prop.buildingType = 'demolished';
       prop.heightMeters = 0;
       prop.monthlyRevenue = 0;
+      prop.construction = undefined;
       console.log(`🔨 Demolición completada en: ${propertyId}`);
       saveStateToDb();
       io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
@@ -329,6 +364,79 @@ io.on('connection', async (socket) => {
     prop.name = newName;
     saveStateToDb();
     io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
+  });
+
+  // 5. Construcción Estilo Sims: Ampliar Nueva Planta
+  socket.on('addBuildingFloor', ({ propertyId, cost }: { propertyId: string; cost: number }) => {
+    const prop = globalProperties.find(p => p.id === propertyId);
+    if (!prop || prop.ownerId !== globalPlayer.id) return;
+    if (globalPlayer.money >= cost) {
+      globalPlayer.money -= cost;
+      
+      if (!prop.construction) {
+        prop.construction = {
+          style: 'modern_glass',
+          totalFloors: prop.levels || 1,
+          maxFloors: 60,
+          floors: [],
+        };
+      }
+      
+      const newFloorNumber = (prop.construction.floors.length || prop.levels || 0) + 1;
+      const floorArea = Math.round(prop.areaSqm / Math.max(1, newFloorNumber));
+      
+      prop.construction.floors.push({
+        floorNumber: newFloorNumber,
+        label: `Planta ${newFloorNumber} (Nueva Ampliación)`,
+        heightMeters: 3.5,
+        areaSqm: floorArea,
+        modules: [],
+        maxModules: 3,
+      });
+      
+      prop.construction.totalFloors = prop.construction.floors.length;
+      prop.levels = prop.construction.totalFloors;
+      prop.heightMeters += 3.5;
+      prop.monthlyRevenue += Math.floor(cost * 0.12);
+      prop.construction.lastUpgradedAt = new Date();
+
+      console.log(`🏗️ [Sims Build] Planta ${newFloorNumber} añadida a ${prop.name} (Altura: ${prop.heightMeters}m)`);
+      saveStateToDb();
+      io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
+    }
+  });
+
+  // 6. Construcción Estilo Sims: Cambiar Estilo Arquitectónico
+  socket.on('changeBuildingStyle', ({ propertyId, style }: { propertyId: string; style: any }) => {
+    const prop = globalProperties.find(p => p.id === propertyId);
+    if (!prop || prop.ownerId !== globalPlayer.id) return;
+    if (!prop.construction) {
+      prop.construction = {
+        style: style,
+        totalFloors: prop.levels || 1,
+        maxFloors: 60,
+        floors: [],
+      };
+    } else {
+      prop.construction.style = style;
+    }
+    console.log(`🎨 [Sims Build] Estilo arquitectónico cambiado a '${style}' en ${prop.name}`);
+    saveStateToDb();
+    io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
+  });
+
+  // 7. Construcción Estilo Sims: Instalar Módulo en Planta
+  socket.on('installFloorModule', ({ propertyId, floorNumber, module }: { propertyId: string; floorNumber: number; module: any }) => {
+    const prop = globalProperties.find(p => p.id === propertyId);
+    if (!prop || prop.ownerId !== globalPlayer.id || !prop.construction) return;
+    const floor = prop.construction.floors.find(f => f.floorNumber === floorNumber);
+    if (floor && floor.modules.length < floor.maxModules) {
+      floor.modules.push(module);
+      prop.monthlyRevenue += 35;
+      console.log(`⚙️ [Sims Build] Módulo ${module.name} instalado en planta ${floorNumber} de ${prop.name}`);
+      saveStateToDb();
+      io.emit('gameState', { player: globalPlayer, machine: globalMachine, properties: globalProperties });
+    }
   });
 });
 

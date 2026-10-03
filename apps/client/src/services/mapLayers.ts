@@ -2,6 +2,59 @@ import type { RealEstateProperty } from '@mmo/shared';
 import { generateQuarryCratersGeoJSON } from './quarryGeometry';
 
 /**
+ * Genera el GeoJSON 3D para construcciones y ampliaciones estilo Sims
+ * de propiedades adquiridas por jugadores
+ */
+export function generatePlayerBuildingsGeoJSON(props: RealEstateProperty[]) {
+  const features: any[] = [];
+  props.forEach(p => {
+    if (!p.construction || p.status === 'demolished' || p.heightMeters <= 0) return;
+    const [lng, lat] = [p.coords.lng, p.coords.lat];
+    const halfSize = 0.00018; // Huella aprox 30x30m
+    const style = p.construction.style || 'modern_glass';
+
+    const color =
+      style === 'modern_glass' ? '#38bdf8' :
+      style === 'industrial_steel' ? '#f59e0b' :
+      style === 'brutalist_concrete' ? '#94a3b8' :
+      style === 'high_tech_composite' ? '#10b981' : '#e11d48';
+
+    const coords = [
+      [lng - halfSize, lat - halfSize * 0.75],
+      [lng + halfSize, lat - halfSize * 0.75],
+      [lng + halfSize, lat + halfSize * 0.75],
+      [lng - halfSize, lat + halfSize * 0.75],
+      [lng - halfSize, lat - halfSize * 0.75],
+    ];
+
+    features.push({
+      type: 'Feature',
+      properties: {
+        id: p.id,
+        name: p.name,
+        height: p.heightMeters,
+        color: color,
+        style: style,
+        floors: p.construction.totalFloors || p.levels || 1,
+      },
+      geometry: { type: 'Polygon', coordinates: [coords] },
+    });
+  });
+  return { type: 'FeatureCollection', features };
+}
+
+/**
+ * Actualiza la capa de construcciones personalizadas en el mapa
+ */
+export function updatePlayerBuildingsLayer(map: any, props: RealEstateProperty[]) {
+  if (!map) return;
+  const source = map.getSource('player-constructions');
+  if (source) {
+    source.setData(generatePlayerBuildingsGeoJSON(props));
+  }
+}
+
+/**
  * Inyecta las capas base y avanzadas en el mapa MapLibre
  */
 export function initializeMapLayers(map: any, initialProperties: RealEstateProperty[]) {
@@ -45,7 +98,7 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
           type: 'raster',
           source: 'satellite-tiles',
           minzoom: 0,
-          maxzoom: 22,
+          maxzoom: 24,
           layout: { visibility: 'visible' },
         },
         'building'
@@ -56,6 +109,8 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
   }
 
   // 4. Terreno 3D con elevación Terrarium DEM y Hillshading
+  // Usamos una exageración base balanceada de 1.15 para que las montañas sean visibles
+  // pero los solares urbanos no deformen ni oculten los edificios en zoom cercano.
   try {
     if (!map.getSource('terrain-dem')) {
       map.addSource('terrain-dem', {
@@ -65,7 +120,7 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
         tileSize: 256,
         maxzoom: 14,
       });
-      map.setTerrain({ source: 'terrain-dem', exaggeration: 2.6 });
+      map.setTerrain({ source: 'terrain-dem', exaggeration: 1.15 });
 
       if (!map.getLayer('terrain-hillshade')) {
         map.addLayer(
@@ -88,7 +143,7 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
     console.warn('DEM Terrain error:', err);
   }
 
-  // 5. Edificios 3D Arquitectónicos
+  // 5. Edificios 3D Arquitectónicos (OpenMapTiles / OSM)
   try {
     if (!map.getLayer('buildings-3d')) {
       map.addLayer({
@@ -97,18 +152,19 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
         'source-layer': 'building',
         type: 'fill-extrusion',
         minzoom: 13,
+        maxzoom: 24, // Permite visualizar edificios hasta el zoom máximo sin desaparecer
         paint: {
           'fill-extrusion-height': [
             'interpolate', ['linear'], ['zoom'],
             13, 0,
-            14.5, ['coalesce', ['get', 'render_height'], ['get', 'height'], 12]
+            14.5, ['coalesce', ['get', 'render_height'], ['get', 'height'], 14]
           ],
           'fill-extrusion-base': [
-            'coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0
+            'coalesce', ['get', 'render_min_height'], ['get', 'min_height'], 0.1
           ],
           'fill-extrusion-color': [
             'interpolate', ['linear'],
-            ['coalesce', ['get', 'render_height'], ['get', 'height'], 12],
+            ['coalesce', ['get', 'render_height'], ['get', 'height'], 14],
             0, '#f8fafc',
             20, '#e2e8f0',
             50, '#cbd5e1',
@@ -116,7 +172,7 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
             150, '#64748b',
             250, '#475569'
           ],
-          'fill-extrusion-opacity': 0.85,
+          'fill-extrusion-opacity': 0.95,
         },
       });
 
@@ -128,15 +184,17 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
           'source-layer': 'building',
           type: 'line',
           minzoom: 13.5,
+          maxzoom: 24,
           paint: {
-            'line-color': 'rgba(56, 189, 248, 0.55)',
+            'line-color': 'rgba(56, 189, 248, 0.65)',
             'line-width': [
               'interpolate', ['linear'], ['zoom'],
               13.5, 1.2,
               16, 2.4,
-              18, 3.6
+              18, 3.6,
+              21, 5.0
             ],
-            'line-opacity': 0.85,
+            'line-opacity': 0.9,
           },
         }, 'buildings-3d');
       }
@@ -149,6 +207,7 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
           'source-layer': 'poi',
           type: 'symbol',
           minzoom: 15.0,
+          maxzoom: 24,
           filter: ['has', 'name'],
           layout: {
             'text-field': ['coalesce', ['get', 'name:es'], ['get', 'name']],
@@ -172,7 +231,41 @@ export function initializeMapLayers(map: any, initialProperties: RealEstatePrope
     console.warn('Buildings 3D error:', err);
   }
 
-  // 6. Canteras y Cráteres Escalonados
+  // 6. Construcciones Modulares de Jugadores Estilo Sims
+  try {
+    if (!map.getSource('player-constructions')) {
+      map.addSource('player-constructions', {
+        type: 'geojson',
+        data: generatePlayerBuildingsGeoJSON(initialProperties),
+      });
+
+      map.addLayer({
+        id: 'player-constructions-3d',
+        type: 'fill-extrusion',
+        source: 'player-constructions',
+        paint: {
+          'fill-extrusion-color': ['get', 'color'],
+          'fill-extrusion-height': ['get', 'height'],
+          'fill-extrusion-base': 0.2,
+          'fill-extrusion-opacity': 0.95,
+        },
+      });
+
+      map.addLayer({
+        id: 'player-constructions-glow',
+        type: 'line',
+        source: 'player-constructions',
+        paint: {
+          'line-color': '#38bdf8',
+          'line-width': 3,
+        },
+      });
+    }
+  } catch (err) {
+    console.warn('Player constructions error:', err);
+  }
+
+  // 7. Canteras y Cráteres Escalonados
   try {
     if (!map.getSource('quarry-craters')) {
       map.addSource('quarry-craters', {
