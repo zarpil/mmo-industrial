@@ -95,20 +95,6 @@ function App() {
         maxPitch={85}
       >
         <NavigationControl position="bottom-right" />
-        
-        {/* Intento de extrusión 3D de edificios (depende del tile de Carto) */}
-        <Layer
-          id="3d-buildings"
-          source="carto"
-          source-layer="building"
-          type="fill-extrusion"
-          minzoom={15}
-          paint={{
-            'fill-extrusion-color': '#2c2c3e',
-            'fill-extrusion-height': 20, // Altura base fija temporal
-            'fill-extrusion-opacity': 0.6
-          }}
-        />
 
         {machine && (
           <Marker 
