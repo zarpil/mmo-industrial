@@ -3,25 +3,42 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import type { Player, MachineInstance } from '@mmo/shared';
 import { simulateMachineCatchup } from './simulation';
-import { initDb, pool } from './db';
+import { initDb, pool, isDbConnected } from './db';
 
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: '*' } });
 
 // Variables globales para el Vertical Slice 
-let globalPlayer: Player | null = null;
-let globalMachine: MachineInstance | null = null;
+let globalPlayer: Player = {
+  id: 'player-1',
+  username: 'Capitalista_01',
+  money: 500,
+  createdAt: new Date(),
+};
+let globalMachine: MachineInstance = {
+  id: 'machine-1',
+  machineDataId: 'coal_extractor',
+  parcelId: 'parcel-1',
+  ownerId: 'player-1',
+  inventory: { maxVolume: 100, slots: [{ itemId: 'coal_ore', quantity: 15 }] },
+  status: 'producing',
+  lastTickProcessedAt: new Date(),
+};
 
 // Cargar o crear el estado inicial desde PostgreSQL
 async function loadStateFromDb() {
+  if (!isDbConnected) {
+    console.log('📦 Servidor usando estado en memoria para desarrollo local rápido');
+    return;
+  }
   const client = await pool.connect();
   try {
     // 1. Jugador
     const playerRes = await client.query('SELECT * FROM players WHERE id = $1', ['player-1']);
     if (playerRes.rows.length === 0) {
-      await client.query('INSERT INTO players (id, username, money) VALUES ($1, $2, $3)', ['player-1', 'Capitalista_01', 0]);
-      globalPlayer = { id: 'player-1', username: 'Capitalista_01', money: 0, createdAt: new Date() };
+      await client.query('INSERT INTO players (id, username, money) VALUES ($1, $2, $3)', ['player-1', 'Capitalista_01', 500]);
+      globalPlayer = { id: 'player-1', username: 'Capitalista_01', money: 500, createdAt: new Date() };
     } else {
       const row = playerRes.rows[0];
       globalPlayer = { id: row.id, username: row.username, money: parseFloat(row.money), createdAt: row.created_at };
@@ -53,6 +70,8 @@ async function loadStateFromDb() {
       };
     }
     console.log('📦 Estado cargado desde BD:', { money: globalPlayer.money, items: globalMachine.inventory.slots });
+  } catch (err: any) {
+    console.warn('⚠️ Error al leer de BD, continuando con estado en memoria:', err.message);
   } finally {
     client.release();
   }
@@ -60,16 +79,20 @@ async function loadStateFromDb() {
 
 // Guardar el estado a PostgreSQL
 async function saveStateToDb() {
-  if (!globalMachine || !globalPlayer) return;
-  const client = await pool.connect();
+  if (!isDbConnected || !globalMachine || !globalPlayer) return;
   try {
-    await client.query('UPDATE players SET money = $1 WHERE id = $2', [globalPlayer.money, globalPlayer.id]);
-    await client.query(
-      'UPDATE machine_instances SET inventory = $1, status = $2, last_tick_at = $3 WHERE id = $4',
-      [globalMachine.inventory, globalMachine.status, globalMachine.lastTickProcessedAt, globalMachine.id]
-    );
-  } finally {
-    client.release();
+    const client = await pool.connect();
+    try {
+      await client.query('UPDATE players SET money = $1 WHERE id = $2', [globalPlayer.money, globalPlayer.id]);
+      await client.query(
+        'UPDATE machine_instances SET inventory = $1, status = $2, last_tick_at = $3 WHERE id = $4',
+        [globalMachine.inventory, globalMachine.status, globalMachine.lastTickProcessedAt, globalMachine.id]
+      );
+    } finally {
+      client.release();
+    }
+  } catch (err: any) {
+    console.warn('⚠️ Error al guardar en BD:', err.message);
   }
 }
 
