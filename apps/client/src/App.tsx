@@ -90,7 +90,18 @@ function App() {
       <Map
         {...viewState}
         onMove={evt => setViewState(evt.viewState)}
-        mapStyle="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+        mapStyle={{
+          version: 8,
+          sources: {
+            osm: {
+              type: 'raster',
+              tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              tileSize: 256,
+              attribution: '&copy; OpenStreetMap'
+            }
+          },
+          layers: [{ id: 'osm-tiles', type: 'raster', source: 'osm' }]
+        }}
         style={{ width: '100%', height: '100%' }}
         maxPitch={85}
       >
