@@ -7,3 +7,11 @@ html, body, #root {
   background-color: #000;
   font-family: system-ui, -apple-system, sans-serif;
 }
+
+/* Truco maestro: Invertir colores de OSM para tener un Dark Mode perfecto sin pagar API */
+.leaflet-layer,
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out,
+.leaflet-control-attribution {
+  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
