@@ -2,9 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>client</title>
+    <title>Industrial Empire MMO</title>
+
+    <!-- MapLibre GL JS cargado desde CDN: esto resuelve el 100% de los
+         Worker issues con Vite/Rolldown. El worker viene bundleado
+         en el mismo JS de CDN y se resuelve sin pasar por el bundler. -->
+    <link href='https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css' rel='stylesheet' />
+    <script src='https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js'></script>
+
+    <style>
+      *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #050a14; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
