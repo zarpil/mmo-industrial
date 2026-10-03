@@ -11,14 +11,13 @@
   },
   "dependencies": {
     "@mmo/shared": "*",
-    "leaflet": "^1.9.4",
+    "maplibre-gl": "^6.11.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-leaflet": "^5.0.0",
+    "react-map-gl": "^8.1.3",
     "socket.io-client": "^4.7.2"
   },
   "devDependencies": {
-    "@types/leaflet": "^1.9.22",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
