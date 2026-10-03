@@ -213,6 +213,22 @@ export default function App() {
   const [terrainExaggeration, setTerrainExaggeration] = useState(2.6);
   const [isRotationUnlocked, setIsRotationUnlocked] = useState(true);
   const [currentZoomLevel, setCurrentZoomLevel] = useState(16.2);
+  const [hoveredInfo, setHoveredInfo] = useState<{
+    x: number;
+    y: number;
+    name: string;
+    isRealName: boolean;
+    type: string;
+    levels: number;
+    height: number;
+    area: number;
+    price: number;
+    isParcel: boolean;
+    status: 'available' | 'owned' | 'facility' | 'other';
+    ownerName?: string;
+  } | null>(null);
+  const selectedReticleMarkerRef = useRef<any>(null);
+
   const [buildingMode, setBuildingMode] = useState<BuildableBlueprint | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -442,9 +458,59 @@ export default function App() {
             },
           });
           console.log('🏢 Edificios 3D realistas renderizándose');
+
+          // Delimitación de Parcelas y Bordes Catastrales en el Suelo
+          if (!m.getLayer('building-cadastral-borders')) {
+            m.addLayer({
+              id: 'building-cadastral-borders',
+              source: 'openmaptiles',
+              'source-layer': 'building',
+              type: 'line',
+              minzoom: 13.5,
+              paint: {
+                'line-color': 'rgba(56, 189, 248, 0.55)', // Borde cian arquitectónico / catastral nítido
+                'line-width': [
+                  'interpolate', ['linear'], ['zoom'],
+                  13.5, 1.2,
+                  16, 2.4,
+                  18, 3.6
+                ],
+                'line-opacity': 0.85,
+              },
+            }, 'buildings-3d');
+            console.log('📐 Delimitación catastral de parcelas inyectada');
+          }
+
+          // Capa de nombres reales de edificios e hitos urbanos (OSM)
+          if (!m.getLayer('building-real-names')) {
+            m.addLayer({
+              id: 'building-real-names',
+              source: 'openmaptiles',
+              'source-layer': 'poi',
+              type: 'symbol',
+              minzoom: 15.0,
+              filter: ['has', 'name'],
+              layout: {
+                'text-field': ['coalesce', ['get', 'name:es'], ['get', 'name']],
+                'text-size': 11,
+                'text-transform': 'uppercase',
+                'text-letter-spacing': 0.08,
+                'text-max-width': 9,
+                'text-offset': [0, -1.2],
+                'text-anchor': 'bottom',
+                'text-allow-overlap': false,
+              },
+              paint: {
+                'text-color': '#f8fafc',
+                'text-halo-color': 'rgba(10, 18, 32, 0.95)',
+                'text-halo-width': 2.5,
+              },
+            });
+            console.log('🏛️ Nombres reales de edificios inyectados');
+          }
         }
       } catch (err) {
-        console.warn('⚠️ No se pudo inyectar buildings-3d:', err);
+        console.warn('⚠️ No se pudo inyectar buildings-3d o capas catastrales:', err);
       }
 
       // ── F. Capas de Canteras y Cráteres de Excavación Minera Progresiva ──
@@ -483,10 +549,89 @@ export default function App() {
         console.warn('Quarry craters layer error:', err);
       }
 
-      // ── G. Hover Interactivo con Cursor Puntero sobre Edificios ──
+      // ── G. Hover Interactivo con Inspector Cadastral Flotante ──
       m.on('mousemove', (e: any) => {
         const features = m.queryRenderedFeatures(e.point, { layers: ['buildings-3d', 'quarry-craters-fill'] });
         m.getCanvas().style.cursor = features.length > 0 ? 'pointer' : '';
+
+        if (features.length > 0) {
+          const feat = features[0];
+          const p = feat.properties || {};
+          const isQuarry = feat.layer?.id === 'quarry-craters-fill';
+
+          if (isQuarry) {
+            const quarryProp = propertiesRef.current.find(item =>
+              item.id.includes(p.id?.replace('-tier1', '')?.replace('-tier2', '')?.replace('-berm', '')?.replace('-pit', ''))
+            );
+            if (quarryProp) {
+              setHoveredInfo({
+                x: e.point.x,
+                y: e.point.y,
+                name: quarryProp.name,
+                isRealName: true,
+                type: 'Cantera Minera Activa',
+                levels: 0,
+                height: quarryProp.excavationDepthMeters || 8,
+                area: quarryProp.areaSqm,
+                price: quarryProp.price,
+                isParcel: true,
+                status: quarryProp.ownerId === player?.id ? 'owned' : 'other',
+                ownerName: quarryProp.ownerName || 'Magnate',
+              });
+              return;
+            }
+          }
+
+          const height = Math.round(p.render_height || p.height || 32);
+          const levels = p.levels || Math.max(1, Math.round(height / 3.4));
+          const osmName = p.name || p['name:es'] || p['name:en'];
+          const hasRealName = Boolean(osmName);
+          const area = Math.round(levels * (220 + height * 5));
+          const price = Math.round(450 + height * 18 + area * 0.12);
+          const coords = e.lngLat;
+          const lat = parseFloat(coords.lat.toFixed(5));
+          const lng = parseFloat(coords.lng.toFixed(5));
+          const propId = `bldg-${feat.id || Math.abs(Math.round(lat * 100000) ^ Math.round(lng * 100000))}`;
+
+          const existing = propertiesRef.current.find(
+            item => item.id === propId || (Math.abs(item.coords.lat - lat) < 0.0003 && Math.abs(item.coords.lng - lng) < 0.0003)
+          );
+
+          let status: 'available' | 'owned' | 'facility' | 'other' = 'available';
+          let ownerName = '';
+          if (existing) {
+            if (existing.ownerId === player?.id) {
+              status = existing.status === 'facility_active' ? 'facility' : 'owned';
+            } else if (existing.ownerId) {
+              status = 'other';
+              ownerName = existing.ownerName || 'Magnate';
+            }
+          }
+
+          setHoveredInfo({
+            x: e.point.x,
+            y: e.point.y,
+            name: existing ? existing.name : (osmName || `Edificio Catastral #${propId.slice(-4)}`),
+            isRealName: hasRealName || Boolean(existing?.name),
+            type: p.building === 'office' ? 'Oficinas & Corporativo' :
+                  p.building === 'commercial' ? 'Comercial' :
+                  p.building === 'retail' ? 'Comercio / Tienda' :
+                  p.building === 'apartments' ? 'Residencial' : 'Inmueble Urbano',
+            levels,
+            height,
+            area: existing ? existing.areaSqm : area,
+            price: existing ? existing.price : price,
+            isParcel: false,
+            status,
+            ownerName,
+          });
+        } else {
+          setHoveredInfo(null);
+        }
+      });
+
+      m.on('mouseout', () => {
+        setHoveredInfo(null);
       });
 
       // ── G. Selección y Consulta de Datos Reales de Edificios / Parcelas ──
@@ -671,6 +816,37 @@ export default function App() {
       marker.remove();
     };
   }, [mapReady, factoryCoords, playSound]);
+
+  // ── 2B. Retícula 3D de Selección Inmobiliaria en el Mundo ───────────
+  useEffect(() => {
+    if (!mapReady || !map.current) return;
+    if (selectedReticleMarkerRef.current) {
+      selectedReticleMarkerRef.current.remove();
+      selectedReticleMarkerRef.current = null;
+    }
+
+    if (selectedProperty) {
+      const el = document.createElement('div');
+      el.className = 'selected-property-reticle';
+      el.innerHTML = `
+        <div class="reticle-badge">
+          <span>🎯</span>
+          <span>${selectedProperty.name}</span>
+        </div>
+      `;
+      const m = new maplibregl.Marker({ element: el })
+        .setLngLat([selectedProperty.coords.lng, selectedProperty.coords.lat])
+        .addTo(map.current);
+      selectedReticleMarkerRef.current = m;
+    }
+
+    return () => {
+      if (selectedReticleMarkerRef.current) {
+        selectedReticleMarkerRef.current.remove();
+        selectedReticleMarkerRef.current = null;
+      }
+    };
+  }, [mapReady, selectedProperty]);
 
   // ── 3. Marcadores 3D para Propiedades Adquiridas, Solares y Canteras ─
   useEffect(() => {
@@ -1833,6 +2009,50 @@ export default function App() {
           Z:{currentZoomLevel}
         </span>
       </div>
+
+      {/* 7. Tarjeta Flotante Cadastral al pasar el cursor sobre Edificios/Parcelas */}
+      {hoveredInfo && (
+        <div
+          className="cadastral-hover-card"
+          style={{ left: hoveredInfo.x, top: hoveredInfo.y }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            {hoveredInfo.isRealName ? (
+              <span className="real-name-tag">🏛️ Nombre Real</span>
+            ) : (
+              <span className="real-name-tag" style={{ background: 'rgba(148, 163, 184, 0.15)', borderColor: '#64748b', color: '#cbd5e1' }}>
+                📐 Parcela Catastral
+              </span>
+            )}
+            <span style={{
+              fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
+              color: hoveredInfo.status === 'owned' ? '#4ade80' :
+                     hoveredInfo.status === 'facility' ? '#fdba74' :
+                     hoveredInfo.status === 'other' ? '#f87171' : '#38bdf8'
+            }}>
+              {hoveredInfo.status === 'owned' ? '👑 En Propiedad' :
+               hoveredInfo.status === 'facility' ? '🏭 Instalación' :
+               hoveredInfo.status === 'other' ? `🔒 ${hoveredInfo.ownerName}` : '🟢 Disponible'}
+            </span>
+          </div>
+
+          <div style={{ fontSize: 13, fontWeight: 800, color: '#f8fafc', letterSpacing: 0.3 }}>
+            {hoveredInfo.name}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8' }}>
+            <span>{hoveredInfo.type}</span>
+            <span>{hoveredInfo.levels > 0 ? `${hoveredInfo.levels} pl. (${hoveredInfo.height}m)` : `${hoveredInfo.height}m cota`}</span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <span style={{ fontSize: 10, color: '#64748b' }}>{hoveredInfo.area.toLocaleString()} m²</span>
+            <span style={{ fontSize: 13, fontWeight: 800, color: '#facc15', fontFamily: 'Chakra Petch' }}>
+              {hoveredInfo.price.toLocaleString()} €
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
