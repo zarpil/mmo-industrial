@@ -18,12 +18,15 @@ const GLOBAL_HUBS = [
   { id: 'madrid', name: 'Madrid (Distrito AZCA)', coords: [-3.6917, 40.4500] as [number, number], zoom: 16.2, pitch: 62, bearing: -25 },
   { id: 'guadarrama', name: '🏔️ Sierra de Guadarrama (Cantera Los Molinos)', coords: [-3.9650, 40.7850] as [number, number], zoom: 14.8, pitch: 72, bearing: -35 },
   { id: 'garzweiler', name: '⛏️ Cantera Gigante Garzweiler (Alemania)', coords: [6.5050, 51.0550] as [number, number], zoom: 14.8, pitch: 70, bearing: 45 },
-  { id: 'alps', name: '🏔️ Alpes Suizos (Matterhorn / Picos 4.400m)', coords: [7.7491, 46.0207] as [number, number], zoom: 13.8, pitch: 75, bearing: -20 },
+  { id: 'alps', name: '🏔️ Alpes Suizos (Matterhorn / Picos 4.400m)', coords: [7.7491, 46.0207] as [number, number], zoom: 14.2, pitch: 75, bearing: -20 },
   { id: 'ny', name: 'Nueva York (Midtown)', coords: [-73.9855, 40.7484] as [number, number], zoom: 16.0, pitch: 64, bearing: 30 },
   { id: 'tokyo', name: 'Tokio (Shinjuku)', coords: [139.6917, 35.6895] as [number, number], zoom: 16.4, pitch: 60, bearing: -40 },
   { id: 'london', name: 'Londres (Canary Wharf)', coords: [-0.0235, 51.5054] as [number, number], zoom: 16.1, pitch: 62, bearing: 45 },
   { id: 'ruhr', name: 'Cuenca del Ruhr (Industrial)', coords: [7.0116, 51.4556] as [number, number], zoom: 15.8, pitch: 58, bearing: 15 },
 ];
+
+// Umbral mínimo de zoom para habilitar rotación y perspectiva 3D
+const MIN_ROTATE_ZOOM = 14.0;
 
 // Opciones de construcción (Factorio / Satisfactory style)
 interface BuildableBlueprint {
@@ -208,6 +211,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'overview' | 'market' | 'factory' | 'properties'>('overview');
   const [visualMode, setVisualMode] = useState<'satellite' | 'realistic' | 'dark'>('satellite');
   const [terrainExaggeration, setTerrainExaggeration] = useState(2.6);
+  const [isRotationUnlocked, setIsRotationUnlocked] = useState(true);
+  const [currentZoomLevel, setCurrentZoomLevel] = useState(16.2);
   const [buildingMode, setBuildingMode] = useState<BuildableBlueprint | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -561,6 +566,64 @@ export default function App() {
         setIsEditingName(false);
         playSound('click');
       });
+
+      // ── H. Control Inteligente de Rotación y Auto-Enderezado al Norte ─
+      const updateRotationLock = () => {
+        const z = m.getZoom();
+        setCurrentZoomLevel(Number(z.toFixed(1)));
+
+        if (z < MIN_ROTATE_ZOOM) {
+          setIsRotationUnlocked(false);
+          // 1. Deshabilitar rotación con botón derecho o gestos táctiles
+          if (m.dragRotate.isEnabled()) {
+            m.dragRotate.disable();
+            m.touchZoomRotate.disableRotation();
+          }
+          m.setMaxPitch(0);
+
+          // 2. Si el mapa está girado o inclinado, auto-enderezar recto hacia el Norte
+          if (Math.abs(m.getBearing()) > 0.1 || m.getPitch() > 0.1) {
+            m.easeTo({
+              bearing: 0,
+              pitch: 0,
+              duration: 500,
+              essential: true,
+            });
+          }
+        } else {
+          setIsRotationUnlocked(true);
+          // Habilitar rotación 3D y perspectiva inclinada
+          if (!m.dragRotate.isEnabled()) {
+            m.dragRotate.enable();
+            m.touchZoomRotate.enableRotation();
+          }
+          m.setMaxPitch(85);
+
+          // Si venía del modo 2D plano y pasa el umbral de juego, inclinar suavemente a perspectiva 3D
+          if (m.getPitch() < 5) {
+            m.easeTo({
+              pitch: 62,
+              duration: 700,
+              essential: true,
+            });
+          }
+        }
+      };
+
+      // Si el usuario hace zoom out por debajo del umbral, cortar inmediatamente la rotación
+      m.on('zoom', () => {
+        const z = m.getZoom();
+        if (z < MIN_ROTATE_ZOOM && m.dragRotate.isEnabled()) {
+          m.dragRotate.disable();
+          m.touchZoomRotate.disableRotation();
+        }
+      });
+
+      // Al terminar de hacer zoom, comprobar estado y enderezar si corresponde
+      m.on('zoomend', updateRotationLock);
+
+      // Verificación inicial de rotación según zoom actual
+      updateRotationLock();
 
       setMapReady(true);
     });
@@ -1736,6 +1799,40 @@ export default function App() {
           })}
         </div>
       </footer>
+
+      {/* 6. Indicador Dinámico de Bloqueo de Rotación y Auto-Enderezado */}
+      <div
+        onClick={() => {
+          if (map.current) {
+            map.current.easeTo({ bearing: 0, duration: 400 });
+            playSound('click');
+          }
+        }}
+        title={isRotationUnlocked ? "Click para enderezar el mapa al Norte" : "Haz zoom para habilitar rotación y 3D"}
+        style={{
+          position: 'absolute', bottom: 24, right: 64, zIndex: 90, pointerEvents: 'auto',
+          background: 'rgba(10, 18, 32, 0.92)', backdropFilter: 'blur(16px)',
+          border: isRotationUnlocked ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid rgba(245, 158, 11, 0.5)',
+          borderRadius: 20, padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 8,
+          fontSize: 11, fontWeight: 700, cursor: 'pointer',
+          color: isRotationUnlocked ? '#38bdf8' : '#fbbf24',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.7)',
+          transition: 'all 0.3s ease',
+        }}
+      >
+        <span style={{ fontSize: 13 }}>{isRotationUnlocked ? '🎮' : '🧭'}</span>
+        <span>
+          {isRotationUnlocked
+            ? 'Rotación 3D Libre (Click derecho/Ctrl para girar)'
+            : 'Orientación Norte Fija (Haz Zoom para perspectiva 3D)'}
+        </span>
+        <span style={{
+          fontSize: 10, background: 'rgba(255, 255, 255, 0.08)',
+          padding: '2px 6px', borderRadius: 4, fontFamily: 'monospace', color: '#94a3b8'
+        }}>
+          Z:{currentZoomLevel}
+        </span>
+      </div>
     </div>
   );
 }
